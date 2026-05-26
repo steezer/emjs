@@ -1,0 +1,45 @@
+# 基于Google风格，但自定义部分选项
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++17
+
+# 缩进设置
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+
+# 行宽限制
+ColumnLimit: 100
+
+# 指针对齐
+PointerAlignment: Left
+DerivePointerAlignment: false
+
+# 大括号风格
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true      # class后换行
+  AfterFunction: true   # 函数后换行
+  AfterControlStatement: false  # if/for等控制语句后换行
+  AfterNamespace: false # 命名空间后换行
+
+# 函数与参数
+AllowAllParametersOfDeclarationOnNextLine: false
+BinPackParameters: false
+AllowShortFunctionsOnASingleLine: Empty
+
+# 访问修饰符
+AccessModifierOffset: -4
+
+# 空格与对齐
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignOperands: Align
+AlignTrailingComments: true
+
+# 模板与命名空间
+AlwaysBreakTemplateDeclarations: Yes
+NamespaceIndentation: None
+
+# 头文件排序
+SortIncludes: false

@@ -1,0 +1,21 @@
+{
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "make",
+            "command": "cmake",
+            "args": ["--build", "build"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "silent",
+                "panel": "shared",
+                "showReuseMessage":false,
+            },
+            "detail": "Debug Tasks"
+        }
+    ],
+    "version": "2.0.0"
+}
