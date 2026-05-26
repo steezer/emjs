@@ -3,8 +3,6 @@
 #include <cstdio>
 #include <iostream>
 #include <string>
-#include <stcpp/basic.hpp>
-#include <stcpp/fs.hpp>
 #include "../src/engine.h"
 #include "../src/extension/console.h"
 #include "../src/extension/date.h"
@@ -12,8 +10,13 @@
 #include "../src/extension/string.h"
 #include "../src/extension/json.h"
 #include "../src/extension/global.h"
+#include <filesystem>
+#include <fstream>
+#include <time.h>
+#include <sys/time.h>
 
 using namespace Emjs;
+namespace fs = std::filesystem;
 
 // C function that adds two numbers. Will be called from JS
 JsValue sum(JsEngine* js, JsValue* args, int nargs)
@@ -21,6 +24,27 @@ JsValue sum(JsEngine* js, JsValue* args, int nargs)
     double a = JsEngine::getNumber(args[0]);  // Fetch 1st arg
     double b = JsEngine::getNumber(args[1]);  // Fetch 2nd arg
     return JsEngine::makeNumber(a + b);
+}
+
+int64_t getTime()
+{
+    struct timeval tp = {0};
+    if(gettimeofday(&tp, NULL)){
+        return 0;
+    }
+    int64_t time=tp.tv_sec;
+    return time * 1000000 + tp.tv_usec;
+}
+
+std::string getFileContent(const std::string &path)
+{
+    std::ifstream ifs(path, std::ios::in | std::ios::binary);
+    if (!ifs) {
+        std::cerr << "Cannot open file: " << path << std::endl;
+        return "";
+    }
+    std::string code((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    return code;
 }
 
 int runTest(void* buffer, std::size_t length, const char* code)
@@ -51,9 +75,9 @@ int runTest(void* buffer, std::size_t length, const char* code)
         return true;
     };
     
-    auto startTime=Stcpp::getTime(true);
+    auto startTime=getTime();
     evalOk(code);
-    std::cout << "Use time: " << (Stcpp::getTime(true)-startTime)/1000.0 << "ms"<< std::endl;
+    std::cout << "Use time: " << (getTime()-startTime)/1000.0 << "ms"<< std::endl;
     
     size_t total, lwm, css;
     js->stats(&total, &lwm, &css);
@@ -76,9 +100,9 @@ int main(int argc, char const* argv[])
     // if (buffer == nullptr) return -1;
     
     for (int i=1; i< argc; i++) {
-        if(Stcpp::Fs::isFile(argv[i])){
+        if(fs::is_regular_file(argv[i])){
             std::cout << "[" <<argv[i] << "]:"<< std::endl;
-            auto code=Stcpp::Fs::getFileContent(argv[i]);
+            auto code=getFileContent(argv[i]);
             runTest(buf.data(), buf.size(), code.c_str());
         }
     }

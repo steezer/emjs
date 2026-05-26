@@ -1,13 +1,12 @@
 cmake_minimum_required (VERSION 3.15)
-if(EXISTS /usr/local/lib/cmake/toolchain/cross.cmake)
-    include(/usr/local/lib/cmake/toolchain/cross.cmake)
-endif()
 project (emjs)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 if(NOT CMAKE_BUILD_TYPE)
 	set(CMAKE_BUILD_TYPE MinSizeRel)
 endif()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(BUILD_CONSOLE "Whether build console extension" ON)
 option(BUILD_GLOBAL "Whether build global extension" ON)
@@ -17,6 +16,7 @@ option(BUILD_JSON "Whether build json extension" ON)
 option(BUILD_MATH "Whether build math extension" ON)
 option(EMJS_OPTIMIZE_SIZE "Enable aggressive size optimization flags" ON)
 option(EMJS_ENGINE_DUMP "Enable dump for engine" OFF)
+option(EMJS_TESTS "Enable build tests" ON)
 
 set(EJS_EXTENSION_FILES )
 
@@ -95,14 +95,16 @@ if(EMJS_ENGINE_DUMP)
 endif()
 
 
-add_executable(test_js tests/test_js.cpp)
-target_link_libraries(test_js emjs-core emjs-exts stcpp)
+if(EMJS_TESTS)
+    add_executable(test_js tests/test_js.cpp)
+    target_link_libraries(test_js emjs-core emjs-exts)
 
-if(EMJS_OPTIMIZE_SIZE)
-    if(APPLE)
-        target_link_options(test_js PRIVATE -Wl,-dead_strip)
-    else()
-        target_link_options(test_js PRIVATE -Wl,--gc-sections)
+    if(EMJS_OPTIMIZE_SIZE)
+        if(APPLE)
+            target_link_options(test_js PRIVATE -Wl,-dead_strip)
+        else()
+            target_link_options(test_js PRIVATE -Wl,--gc-sections)
+        endif()
     endif()
 endif()
 
