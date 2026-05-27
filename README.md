@@ -3,7 +3,6 @@
 Emjs is a lightweight JavaScript interpreter for embedded scenarios (C++17).  
 This document is aligned with the current implementation under `src/`, and examples are written according to actual behavior.
 
-- Version constant: `kVersion = "1.0.0"` in `src/core.h`
 - Execution model: direct interpretation (no bytecode VM)
 - Memory model: engine state + JS heap in a fixed buffer
 
