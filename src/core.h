@@ -5,7 +5,7 @@
 
 namespace Emjs {
 
-inline constexpr const char kVersion[] = "1.0.0";
+inline constexpr const char kVersion[] = "1.1.0";
 
 using JsValue = std::uint64_t;
 using JsOffset = std::uint32_t;
