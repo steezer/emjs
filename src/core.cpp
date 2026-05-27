@@ -266,6 +266,38 @@ static JsValue upper(JsEngineState* st, JsValue scope)
     return mkval(T_OBJ, loadoff(st, (JsOffset)(vdata(scope) + sizeof(JsOffset))));
 }
 
+static inline JsOffset func_code_off(JsValue fn)
+{
+    return (JsOffset)(vdata(fn) & 0xffffffffUL);
+}
+
+static inline JsOffset func_scope_off(JsValue fn)
+{
+    return (JsOffset)(vdata(fn) >> 32);
+}
+
+static inline JsValue mkfunc(JsEngineState* st, JsValue str)
+{
+    JsOffset soff = (JsOffset)vdata(str);
+    JsOffset scoff = (JsOffset)vdata(st->scope);
+    return mkval(T_FUNC, ((JsValue)scoff << 32) | soff);
+}
+
+static JsOffset func_vstr(JsEngineState* st, JsValue fn, JsOffset* len)
+{
+    return vstr(st, mkval(T_STR, func_code_off(fn)), len);
+}
+
+static void js_fixup_func(JsEngineState* st, JsValue* vp, JsOffset start, JsOffset size)
+{
+    if (vp == NULL || vtype(*vp) != T_FUNC) return;
+    JsOffset code = func_code_off(*vp);
+    JsOffset scope = func_scope_off(*vp);
+    if (code > start) code -= size;
+    if (scope > start) scope -= size;
+    *vp = mkval(T_FUNC, ((JsValue)scope << 32) | code);
+}
+
 // clang-format off
 #define CHECKV(_v)        \
     do {                  \
@@ -349,7 +381,7 @@ static size_t strstring(JsEngineState* st, JsValue value, char* buf, size_t len)
 // Stringify JS function
 static size_t strfunc(JsEngineState* st, JsValue value, char* buf, size_t len)
 {
-    JsOffset sn, off = vstr(st, value, &sn);
+    JsOffset sn, off = func_vstr(st, value, &sn);
     size_t n = cpy(buf, len, "function", 8);
     return n + cpy(buf + n, len - n, (char*)&st->memory[off], sn);
 }
@@ -433,6 +465,10 @@ static void js_fixup_value(JsEngineState* st, JsValue* vp, JsOffset start, JsOff
 {
     if (vp == NULL) return;
     JsValue v = *vp;
+    if (vtype(v) == T_FUNC) {
+        js_fixup_func(st, vp, start, size);
+        return;
+    }
     if (is_mem_entity(vtype(v)) && (JsOffset)vdata(v) > start) {
         *vp = mkval(vtype(v), (unsigned long)(vdata(v) - size));
     }
@@ -457,7 +493,10 @@ static void js_fixup_offsets(JsEngineState* st, JsOffset start, JsOffset size)
             JsOffset koff = loadoff(st, (JsOffset)(off + sizeof(off)));
             if (koff > start) saveoff(st, (JsOffset)(off + sizeof(off)), koff - size);
             JsValue val = loadval(st, (JsOffset)(off + sizeof(off) + sizeof(off)));
-            if (is_mem_entity(vtype(val)) && vdata(val) > start) {
+            if (vtype(val) == T_FUNC) {
+                js_fixup_func(st, &val, start, size);
+                saveval(st, (JsOffset)(off + sizeof(off) + sizeof(off)), val);
+            } else if (is_mem_entity(vtype(val)) && vdata(val) > start) {
                 saveval(st, (JsOffset)(off + sizeof(off) + sizeof(off)),
                         mkval(vtype(val), (unsigned long)(vdata(val) - size)));
             }
@@ -512,7 +551,13 @@ static JsOffset js_unmark_entity(JsEngineState* st, JsOffset off)
             if (link != 0) js_unmark_entity(st, link);
             js_unmark_entity(st, loadoff(st, (JsOffset)(off + sizeof(off))));
             JsValue val = loadval(st, (JsOffset)(off + sizeof(off) + sizeof(off)));
-            if (is_mem_entity(vtype(val))) js_unmark_entity(st, (JsOffset)vdata(val));
+            if (vtype(val) == T_FUNC) {
+                js_unmark_entity(st, func_code_off(val));
+                JsOffset sc = func_scope_off(val);
+                if (sc != 0) js_unmark_entity(st, sc);
+            } else if (is_mem_entity(vtype(val))) {
+                js_unmark_entity(st, (JsOffset)vdata(val));
+            }
         }
     }
     return v & ~(GCMASK | 3U);
@@ -721,6 +766,22 @@ static void delscope(JsEngineState* st)
 {
     st->scope = upper(st, st->scope);
     // printf("EXIT  SCOPE %u\n", (JsOffset) vdata(st->scope));
+}
+
+static JsOffset lkp(JsEngineState* st, JsValue obj, const char* buf, size_t len);
+
+static void scope_copy_props(JsEngineState* st, JsValue src, JsValue dst)
+{
+    JsOffset off = loadoff(st, (JsOffset)vdata(src)) & kPropLinkMask;
+    while (off != 0 && off < st->break_) {
+        JsOffset koff = loadoff(st, (JsOffset)(off + sizeof(off)));
+        JsOffset klen = (loadoff(st, koff) >> 2) - 1;
+        const char* p = (char*)&st->memory[koff + sizeof(koff)];
+        JsValue val = resolveprop(st, loadval(st, (JsOffset)(off + sizeof(off) + sizeof(off))));
+        JsOffset pflags = loadoff(st, off) & kPropConst;
+        setprop(st, dst, mkstr(st, p, klen), val, pflags);
+        off = loadoff(st, off) & kPropLinkMask;
+    }
 }
 
 static JsValue js_block(JsEngineState* st, bool create_scope)
@@ -993,10 +1054,14 @@ static JsValue call_c(JsEngineState* st, JsEngine::NativeFunction fn)
     return res;
 }
 
-static JsValue invoke_js_fn(JsEngineState* st, const char* fn, JsOffset fnlen, JsValue* args, int argc)
+static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, JsOffset fnlen, JsValue* args,
+                            int argc)
 {
     JsOffset fnpos = 1;
-    mkscope(st);
+    JsValue saved_scope = st->scope;
+    JsOffset parent = func_scope_off(fnval);
+    if (parent == 0) parent = (JsOffset)vdata(saved_scope);
+    st->scope = mkobj(st, parent);
     int argi = 0;
     while (fnpos < fnlen) {
         fnpos = skiptonext(fn, fnlen, fnpos);
@@ -1017,12 +1082,12 @@ static JsValue invoke_js_fn(JsEngineState* st, const char* fn, JsOffset fnlen, J
     JsValue res = js_eval(reinterpret_cast<JsEngine*>(st), &fn[fnpos], n);
     if (!is_err(res) && !(st->flags & kFlagReturn)) res = mkundef();
     st->flags &= (uint8_t)~kFlagReturn;
-    delscope(st);
+    st->scope = saved_scope;
     return res;
 }
 
 // Call JS function. 'fn' looks like this: "(a,b) { return a + b; }"
-static JsValue call_js(JsEngineState* st, const char* fn, JsOffset fnlen)
+static JsValue call_js(JsEngineState* st, JsValue fnval, const char* fn, JsOffset fnlen)
 {
     int argc = 0;
     st->position = skiptonext(st->code, st->codeLen, st->position);
@@ -1038,7 +1103,7 @@ static JsValue call_js(JsEngineState* st, const char* fn, JsOffset fnlen)
         if (st->position < st->codeLen && st->code[st->position] == ',') st->position++;
     }
     reverse((JsValue*)&st->memory[st->memSize], argc);
-    JsValue res = invoke_js_fn(st, fn, fnlen, (JsValue*)&st->memory[st->memSize], argc);
+    JsValue res = invoke_js_fn(st, fnval, fn, fnlen, (JsValue*)&st->memory[st->memSize], argc);
     st->memSize += (JsOffset)sizeof(JsValue) * (JsOffset)argc;
     return res;
 }
@@ -1057,9 +1122,9 @@ static JsValue do_call_op(JsEngineState* st, JsValue func, JsValue args)
     JsOffset nogc = st->noGc;
     JsValue res = mkundef();
     if (vtype(func) == T_FUNC) {
-        JsOffset fnlen, fnoff = vstr(st, func, &fnlen);
+        JsOffset fnlen, fnoff = func_vstr(st, func, &fnlen);
         st->noGc = (JsOffset)(fnoff - sizeof(JsOffset));
-        res = call_js(st, (const char*)(&st->memory[fnoff]), fnlen);
+        res = call_js(st, func, (const char*)(&st->memory[fnoff]), fnlen);
     } else {
         res = call_c(st, reinterpret_cast<JsEngine::NativeFunction>(vdata(func)));
     }
@@ -1218,7 +1283,7 @@ static JsValue mkfunc_parts(JsEngineState* st, const void* a, size_t na, const v
     JsValue str = mkstr(st, buf, n);
     if (buf != stack) free(buf);
     if (is_err(str)) return str;
-    return mkval(T_FUNC, (unsigned long)vdata(str));
+    return mkfunc(st, str);
 }
 
 static bool src_peek_arrow(JsEngineState* st, JsOffset off)
@@ -1316,7 +1381,7 @@ static JsValue js_arrow_build(JsEngineState* st, const void* params, size_t plen
         JsValue str = mkstr(st, buf, n);
         if (buf != stack) free(buf);
         if (is_err(str)) return str;
-        fn = mkval(T_FUNC, (unsigned long)vdata(str));
+        fn = mkfunc(st, str);
         st->position = body_end;
     }
     st->consumed = 1;
@@ -1368,7 +1433,7 @@ static JsValue js_func_body(JsEngineState* st)
     st->flags = flags;
     JsValue str = mkstr(st, &st->code[pos], st->position - pos);
     st->consumed = 1;
-    return mkval(T_FUNC, (unsigned long)vdata(str));
+    return mkfunc(st, str);
 }
 
 static JsValue js_func_literal(JsEngineState* st)
@@ -1735,23 +1800,33 @@ static inline bool is_err2(JsValue* v, JsValue* res)
 
 static JsValue js_for(JsEngineState* st)
 {
+    enum : uint8_t { kForLexNone = 0, kForLexLet = 1, kForLexConst = 2 };
     uint8_t flags = st->flags, exe = !(flags & kFlagNoExec);
+    uint8_t for_lex = kForLexNone;
     JsValue v, res = mkundef();
     JsOffset pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    JsValue loopScope = mkundef();
+    JsOffset loopScopeParent = 0;
     if (exe) mkscope(st);  // Enter new scope
     if (!expect(st, TOK_FOR, &res)) goto done;
     if (!expect(st, TOK_LPAREN, &res)) goto done;
 
     if (next(st) == TOK_SEMICOLON) {  // initialisation
     } else if (next(st) == TOK_LET) {
+        for_lex = kForLexLet;
         v = js_bind(st, false);
         if (is_err2(&v, &res)) goto done;
     } else if (next(st) == TOK_CONST) {
+        for_lex = kForLexConst;
         v = js_bind(st, true);
         if (is_err2(&v, &res)) goto done;
     } else {
         v = js_expr(st);
         if (is_err2(&v, &res)) goto done;
+    }
+    if (for_lex != kForLexNone && exe) {
+        loopScope = st->scope;
+        loopScopeParent = (JsOffset)vdata(upper(st, loopScope));
     }
     if (!expect(st, TOK_SEMICOLON, &res)) goto done;
     st->flags |= kFlagNoExec;
@@ -1772,33 +1847,50 @@ static JsValue js_for(JsEngineState* st)
     if (is_err2(&v, &res)) goto done;
     pos4 = st->position;  // end of body
     while (!(flags & kFlagNoExec)) {
+        if (for_lex != kForLexNone && exe) {
+            JsValue iterScope = mkobj(st, loopScopeParent);
+            scope_copy_props(st, loopScope, iterScope);
+            st->scope = iterScope;
+        }
         st->flags = flags, st->position = pos1, st->consumed = 1;
         if (next(st) != TOK_SEMICOLON) {       // Is condition specified?
             v = resolveprop(st, js_expr(st));  // Yes. check condition
-            if (is_err2(&v, &res)) goto done;  // Fail short on error
-            if (!truthy(st, v)) break;         // Exit the loop if condition is false
+            if (is_err2(&v, &res)) goto loop_scope_done;
+            if (!truthy(st, v)) {              // Exit the loop if condition is false
+                if (for_lex != kForLexNone && exe) st->scope = loopScope;
+                break;
+            }
         }
         st->position = pos3, st->consumed = 1,
         st->flags |= kFlagLoop;             // Execute the
         v = js_block_or_stmt(st);           // loop body
-        if (is_err2(&v, &res)) goto done;   // Fail on error
-        if (st->flags & kFlagBreak) break;  // break was executed - exit the loop!
-        if (st->flags & kFlagReturn) {
-            res = v;
+        if (is_err2(&v, &res)) goto loop_scope_done;
+        if (st->flags & kFlagBreak) {
+            if (for_lex != kForLexNone && exe) st->scope = loopScope;
             break;
         }
+        if (st->flags & kFlagReturn) {
+            res = v;
+            if (for_lex != kForLexNone && exe) st->scope = loopScope;
+            break;
+        }
+        if (for_lex != kForLexNone && exe) st->scope = loopScope;
         st->flags = flags, st->position = pos2,
         st->consumed = 1;                      // Jump to final expr
         if (next(st) != TOK_RPAREN) {          // Is it specified?
             v = js_expr(st);                   // Yes. Execute it
-            if (is_err2(&v, &res)) goto done;  // On error, fail short
+            if (is_err2(&v, &res)) goto loop_scope_done;
         }
+        if (for_lex != kForLexNone && exe) st->scope = loopScope;
     }
     if (!(st->flags & kFlagReturn)) {
         st->position = pos4;
         st->token = TOK_SEMICOLON;
         st->consumed = 0;
     }
+    goto done;
+loop_scope_done:
+    if (for_lex != kForLexNone && exe) st->scope = loopScope;
 done:
     if (exe) delscope(st);  // Exit scope
     if (st->flags & kFlagReturn) return res;
@@ -2333,10 +2425,10 @@ JsValue internal::js_invoke(JsEngineState* st, JsValue func, JsValue thisArg, Js
         res = reinterpret_cast<JsEngine::NativeFunction>(vdata(func))(
             reinterpret_cast<JsEngine*>(st), args, argc);
     } else if (vtype(func) == T_FUNC) {
-        JsOffset fnlen = 0, fnoff = vstr(st, func, &fnlen);
+        JsOffset fnlen = 0, fnoff = func_vstr(st, func, &fnlen);
         JsOffset nogc = st->noGc;
         st->noGc = (JsOffset)(fnoff - sizeof(JsOffset));
-        res = invoke_js_fn(st, (const char*)(&st->memory[fnoff]), fnlen, args, argc);
+        res = invoke_js_fn(st, func, (const char*)(&st->memory[fnoff]), fnlen, args, argc);
         st->noGc = nogc;
     } else {
         res = mkerr(st, "not a function");
