@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Getting Started with Emjs — Build, Install &amp; Embed</title>
+  <meta name="description" content="Build Emjs with CMake, link emjs-core and emjs-exts static libraries, install headers and CLI, and run your first embedded JavaScript example.">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/getting-started.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/getting-started.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/getting-started.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation">Menu</button>
+      <nav class="site-nav">
+        <a href="index.html">Home</a>
+        <a class="active" href="getting-started.html">Getting Started</a>
+        <a href="cli.html">CLI</a>
+        <a href="cpp-api.html">C++ API</a>
+        <a href="javascript.html">JavaScript</a>
+        <a href="extensions.html">Extensions</a>
+        <a class="lang-switch" href="getting-started.zh-CN.html">中文</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.html">Home</a> / Getting Started</nav>
+      <h1>Getting Started</h1>
+      <p>Build Emjs from source, install artifacts, and embed the engine in a C++ application.</p>
+    </header>
+
+    <h2>Requirements</h2>
+    <ul>
+      <li>C++17 compatible compiler (GCC, Clang, MSVC)</li>
+      <li>CMake 3.14+</li>
+      <li>No third-party runtime dependencies for the core engine</li>
+    </ul>
+
+    <h2>Build</h2>
+    <pre><code>git clone https://github.com/steezer/emjs.git
+cd emjs
+mkdir -p build &amp;&amp; cd build
+cmake ..
+cmake --build .</code></pre>
+
+    <p>CMake targets produced:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Target</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>emjs</code></td><td>Command-line executable</td></tr>
+          <tr><td><code>emjs-core</code></td><td>Core interpreter static library</td></tr>
+          <tr><td><code>emjs-exts</code></td><td>Optional extension modules static library</td></tr>
+          <tr><td><code>test_js</code></td><td>Test runner for script files</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Install</h2>
+    <pre><code>cmake --install build --prefix /usr/local</code></pre>
+    <p>Typical install layout:</p>
+    <ul>
+      <li><code>/usr/local/bin/emjs</code></li>
+      <li><code>/usr/local/lib/libemjs-core.a</code></li>
+      <li><code>/usr/local/lib/libemjs-exts.a</code></li>
+      <li><code>/usr/local/include/emjs/*.h</code></li>
+    </ul>
+
+    <h2>Minimal embed example</h2>
+    <pre><code>#include "engine.h"
+#include &lt;cstdio&gt;
+
+using namespace Emjs;
+
+int main() {
+  char mem[4096] = {0};
+  JsEngine* js = JsEngine::create(mem, sizeof(mem));
+  if (!js) return 1;
+
+  JsValue r = js->eval("let x=3; let y=4; x*y + 1;");
+  std::printf("%s\n", js->str(r)); // prints 13
+
+  JsEngine::destroy(js);
+  return 0;
+}</code></pre>
+
+    <h2>Linking in your project</h2>
+    <pre><code># Example compile line
+c++ -std=c++17 app.cpp -I/path/to/emjs/include/emjs \
+    -L/path/to/emjs/lib -lemjs-core -lemjs-exts</code></pre>
+
+    <h2>Project layout</h2>
+    <pre><code>src/
+  core.h / core.cpp       # lexer, parser, interpreter, GC
+  engine.h / engine.cpp   # public C++ API
+  internal.h / internal.cpp
+  extension/              # optional modules (console, math, json...)
+app.cpp                   # CLI source
+tests/script/             # example JavaScript files</code></pre>
+
+    <h2>Build options</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Option</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>EMJS_OPTIMIZE_SIZE</code></td><td>ON</td><td>Enable <code>-Oz</code> and size-focused flags</td></tr>
+          <tr><td><code>EMJS_ENGINE_DUMP</code></td><td>OFF</td><td>Enable verbose <code>dump()</code> debugging</td></tr>
+          <tr><td><code>BUILD_CONSOLE</code> etc.</td><td>ON</td><td>Toggle individual extension modules</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">Next: use the <a href="cli.html">CLI tool</a> to run scripts, or read the <a href="cpp-api.html">C++ API</a> for embedding details.</div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — Getting Started</div>
+      <div class="footer-links">
+        <a href="index.html">Home</a>
+        <a href="cli.html">CLI</a>
+        <a href="cpp-api.html">C++ API</a>
+      </div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

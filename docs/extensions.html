@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs Extension Modules — console, Math, JSON, Date</title>
+  <meta name="description" content="Optional Emjs extension modules: console, parseInt/parseFloat, String.fromCharCode, Date, Math, and JSON. CMake build flags and runtime bind API.">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/extensions.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/extensions.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/extensions.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation">Menu</button>
+      <nav class="site-nav">
+        <a href="index.html">Home</a>
+        <a href="getting-started.html">Getting Started</a>
+        <a href="cli.html">CLI</a>
+        <a href="cpp-api.html">C++ API</a>
+        <a href="javascript.html">JavaScript</a>
+        <a class="active" href="extensions.html">Extensions</a>
+        <a class="lang-switch" href="extensions.zh-CN.html">中文</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.html">Home</a> / Extensions</nav>
+      <h1>Extension Modules</h1>
+      <p>Optional modules compiled into <code>libemjs-exts.a</code>. Must be explicitly bound at runtime (the CLI binds them automatically).</p>
+    </header>
+
+    <h2>CMake options</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Option</th><th>Module</th></tr></thead>
+        <tbody>
+          <tr><td><code>BUILD_CONSOLE</code></td><td><code>console.*</code></td></tr>
+          <tr><td><code>BUILD_GLOBAL</code></td><td><code>global.*</code> (parseInt, parseFloat)</td></tr>
+          <tr><td><code>BUILD_STRING</code></td><td><code>string.*</code> (String.fromCharCode)</td></tr>
+          <tr><td><code>BUILD_DATE</code></td><td><code>date.*</code></td></tr>
+          <tr><td><code>BUILD_JSON</code></td><td><code>json.*</code></td></tr>
+          <tr><td><code>BUILD_MATH</code></td><td><code>math.*</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Runtime binding</h2>
+    <pre><code>#include "extension/console.h"
+#include "extension/global.h"
+#include "extension/string.h"
+#include "extension/date.h"
+#include "extension/math.h"
+#include "extension/json.h"
+
+EConsole::bind(js);
+EGlobal::bind(js);
+EString::bind(js);
+EDate::bind(js);
+EMath::bind(js);
+EJson::bind(js);</code></pre>
+
+    <h2>console</h2>
+    <ul>
+      <li><code>console.log(...args)</code></li>
+      <li><code>console.time(label?)</code></li>
+      <li><code>console.timeLog(label, ...args)</code></li>
+      <li><code>console.timeEnd(label?)</code></li>
+    </ul>
+
+    <h2>global</h2>
+    <ul>
+      <li><code>parseInt(str[, radix])</code></li>
+      <li><code>parseFloat(str)</code></li>
+    </ul>
+
+    <h2>String (global object)</h2>
+    <ul><li><code>String.fromCharCode(...codes)</code></li></ul>
+
+    <h2>Date</h2>
+    <ul>
+      <li><code>Date.now()</code></li>
+      <li><code>Date.format([timestampMs][, format])</code></li>
+    </ul>
+    <p>Default format: <code>%Y-%m-%d %H:%i:%s</code></p>
+
+    <h2>Math</h2>
+    <p>Constants: <code>E, LN10, LN2, LOG10E, LOG2E, PI, SQRT1_2, SQRT2</code></p>
+    <p>Functions: <code>abs acos acosh asin asinh atan atan2 atanh cbrt ceil clz32 cos cosh exp expm1 f16round floor fround hypot imul log log10 log1p log2 max min pow random round sign sin sinh sqrt sumPrecise tan tanh trunc</code></p>
+
+    <h2>JSON</h2>
+    <pre><code>let o = JSON.parse('{"a":1,"b":[2,3]}');
+JSON.stringify(o); // {"a":1,"b":[2,3]}</code></pre>
+
+    <div class="note">Core array/string methods work without extensions — see <a href="javascript.html">JavaScript Features</a>.</div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — Extensions</div>
+      <div class="footer-links"><a href="getting-started.html">Getting Started</a><a href="cpp-api.html">C++ API</a></div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

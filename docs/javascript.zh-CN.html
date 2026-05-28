@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs JavaScript 特性 — 语法、闭包与限制</title>
+  <meta name="description" content="Emjs 支持的 JavaScript 语言特性：let/const、运算符、控制流、函数、箭头函数、闭包、数组方法，以及明确不支持的功能。">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/javascript.zh-CN.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/javascript.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/javascript.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.zh-CN.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="打开导航">菜单</button>
+      <nav class="site-nav">
+        <a href="index.zh-CN.html">首页</a>
+        <a href="getting-started.zh-CN.html">快速开始</a>
+        <a href="cli.zh-CN.html">命令行</a>
+        <a href="cpp-api.zh-CN.html">C++ API</a>
+        <a class="active" href="javascript.zh-CN.html">JavaScript</a>
+        <a href="extensions.zh-CN.html">扩展模块</a>
+        <a class="lang-switch" href="javascript.html">English</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.zh-CN.html">首页</a> / JavaScript</nav>
+      <h1>JavaScript 语言支持</h1>
+      <p>能力与 <code>src/core.cpp</code>、<code>src/internal.cpp</code> 源码对齐。生产脚本建议显式写分号。</p>
+    </header>
+
+    <h2>字面量与类型</h2>
+    <pre><code>undefined; null; true; false;
+123; 3.14; 0x10;
+"abc"; 'xyz';
+({a:1, b:2});
+[1, 2, 3];</code></pre>
+
+    <h2>变量</h2>
+    <ul>
+      <li><code>let</code> 与 <code>const</code>（不支持 <code>var</code>）</li>
+      <li>复合赋值：<code>+= -= *= /= %=</code> 及位运算变体</li>
+      <li>后缀自增减 <code>i++</code> / <code>i--</code></li>
+      <li>对 <code>const</code> 重新赋值报错：<code>assignment to constant</code></li>
+    </ul>
+
+    <h2>运算符</h2>
+    <p>算术、位运算、比较、宽松/严格相等、逻辑、三元运算符与 <code>typeof</code>。</p>
+
+    <h2>控制流</h2>
+    <p><code>if/else</code>、<code>for</code>、<code>while</code>、<code>do...while</code>、<code>switch</code>、<code>break</code>、<code>continue</code>、<code>try/catch/finally</code>、<code>throw</code>、<code>return</code>。</p>
+
+    <h2>函数与闭包</h2>
+    <ul>
+      <li>函数声明、函数表达式、IIFE</li>
+      <li>箭头函数：<code>x =&gt; x*2</code>、<code>(a,b) =&gt; a+b</code>、块体</li>
+      <li>词法闭包 — 嵌套函数捕获定义时的作用域</li>
+      <li><code>for (let i = 0; ...)</code> 每次迭代独立绑定（循环闭包行为正确）</li>
+    </ul>
+    <pre><code>// 闭包示例
+function a() {
+  let x = 1;
+  function b() {
+    let y = 2;
+    return function c() { return x + y; };
+  }
+  return b();
+}
+a()(); // 3
+
+// 循环闭包
+let funcs = [];
+for (let i = 0; i &lt; 3; i++) {
+  funcs[i] = function() { return i; };
+}
+funcs[0](); // 0</code></pre>
+
+    <h2>核心内置（不含扩展）</h2>
+    <h3>String 方法</h3>
+    <p><code>length</code>、<code>charCodeAt</code>、<code>charAt</code>、<code>indexOf</code>、<code>substring</code></p>
+    <h3>Array 方法</h3>
+    <p><code>push</code>、<code>pop</code>、<code>shift</code>、<code>slice</code>、<code>reverse</code>、<code>sort</code>、<code>splice</code>、<code>forEach</code>、<code>map</code>、<code>every</code>、<code>some</code>、<code>find</code>、<code>findIndex</code>、<code>reduce</code>、<code>indexOf</code>、<code>join</code></p>
+
+    <h2>不支持（当前版本）</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>特性</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>var</code>、<code>class</code>、<code>new</code></td><td>解析/运行时报错</td></tr>
+          <tr><td><code>this</code>、<code>delete</code>、<code>with</code></td><td>未实现</td></tr>
+          <tr><td><code>yield</code>、<code>void</code>、<code>in</code>、<code>instanceof</code></td><td>未实现</td></tr>
+          <tr><td>ES 模块、Promise、原型链</td><td>不支持</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>常见错误</h2>
+    <p><code>parse error</code>、<code>; expected</code>、<code>type mismatch</code>、<code>'xxx' not found</code>、<code>oom</code>、<code>C stack</code> — 多数带 <code>at line N col M</code> 位置信息。</p>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — JavaScript</div>
+      <div class="footer-links"><a href="extensions.zh-CN.html">扩展模块</a><a href="cpp-api.zh-CN.html">C++ API</a></div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

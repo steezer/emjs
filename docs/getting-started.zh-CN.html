@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs 快速开始 — 构建、安装与嵌入</title>
+  <meta name="description" content="使用 CMake 构建 Emjs，链接 emjs-core 与 emjs-exts 静态库，安装头文件与命令行工具，运行第一个嵌入式 JavaScript 示例。">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/getting-started.zh-CN.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/getting-started.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/getting-started.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.zh-CN.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="打开导航">菜单</button>
+      <nav class="site-nav">
+        <a href="index.zh-CN.html">首页</a>
+        <a class="active" href="getting-started.zh-CN.html">快速开始</a>
+        <a href="cli.zh-CN.html">命令行</a>
+        <a href="cpp-api.zh-CN.html">C++ API</a>
+        <a href="javascript.zh-CN.html">JavaScript</a>
+        <a href="extensions.zh-CN.html">扩展模块</a>
+        <a class="lang-switch" href="getting-started.html">English</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.zh-CN.html">首页</a> / 快速开始</nav>
+      <h1>快速开始</h1>
+      <p>从源码构建 Emjs，安装产物，并在 C++ 应用中嵌入引擎。</p>
+    </header>
+
+    <h2>环境要求</h2>
+    <ul>
+      <li>支持 C++17 的编译器（GCC、Clang、MSVC）</li>
+      <li>CMake 3.14 及以上</li>
+      <li>核心引擎无第三方运行时依赖</li>
+    </ul>
+
+    <h2>构建</h2>
+    <pre><code>git clone https://github.com/steezer/emjs.git
+cd emjs
+mkdir -p build &amp;&amp; cd build
+cmake ..
+cmake --build .</code></pre>
+
+    <p>CMake 生成的目标：</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>目标</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>emjs</code></td><td>命令行可执行文件</td></tr>
+          <tr><td><code>emjs-core</code></td><td>核心解释器静态库</td></tr>
+          <tr><td><code>emjs-exts</code></td><td>扩展模块静态库</td></tr>
+          <tr><td><code>test_js</code></td><td>脚本测试运行器</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>安装</h2>
+    <pre><code>cmake --install build --prefix /usr/local</code></pre>
+    <p>典型安装路径：</p>
+    <ul>
+      <li><code>/usr/local/bin/emjs</code></li>
+      <li><code>/usr/local/lib/libemjs-core.a</code></li>
+      <li><code>/usr/local/lib/libemjs-exts.a</code></li>
+      <li><code>/usr/local/include/emjs/*.h</code></li>
+    </ul>
+
+    <h2>最小嵌入示例</h2>
+    <pre><code>#include "engine.h"
+#include &lt;cstdio&gt;
+
+using namespace Emjs;
+
+int main() {
+  char mem[4096] = {0};
+  JsEngine* js = JsEngine::create(mem, sizeof(mem));
+  if (!js) return 1;
+
+  JsValue r = js->eval("let x=3; let y=4; x*y + 1;");
+  std::printf("%s\n", js->str(r)); // 输出 13
+
+  JsEngine::destroy(js);
+  return 0;
+}</code></pre>
+
+    <h2>在项目中链接</h2>
+    <pre><code>c++ -std=c++17 app.cpp -I/path/to/emjs/include/emjs \
+    -L/path/to/emjs/lib -lemjs-core -lemjs-exts</code></pre>
+
+    <h2>项目结构</h2>
+    <pre><code>src/
+  core.h / core.cpp       # 词法、语法、解释器、GC
+  engine.h / engine.cpp   # 对外 C++ API
+  internal.h / internal.cpp
+  extension/              # 可选模块（console、math、json...）
+app.cpp                   # CLI 源码
+tests/script/             # JavaScript 示例脚本</code></pre>
+
+    <h2>编译选项</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>选项</th><th>默认</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>EMJS_OPTIMIZE_SIZE</code></td><td>ON</td><td>启用 <code>-Oz</code> 等体积优化</td></tr>
+          <tr><td><code>EMJS_ENGINE_DUMP</code></td><td>OFF</td><td>启用 <code>dump()</code> 调试输出</td></tr>
+          <tr><td><code>BUILD_CONSOLE</code> 等</td><td>ON</td><td>控制各扩展模块是否编译</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">下一步：使用 <a href="cli.zh-CN.html">命令行工具</a> 运行脚本，或阅读 <a href="cpp-api.zh-CN.html">C++ API</a> 了解嵌入细节。</div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — 快速开始</div>
+      <div class="footer-links">
+        <a href="index.zh-CN.html">首页</a>
+        <a href="cli.zh-CN.html">命令行</a>
+        <a href="cpp-api.zh-CN.html">C++ API</a>
+      </div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

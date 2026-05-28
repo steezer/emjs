@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://steezer.github.io/emjs/doc/sitemap.xml

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs C++ API — eval, callGlobal &amp; Native Bindings</title>
+  <meta name="description" content="Reference for the Emjs JsEngine C++ API: create/destroy, eval, callGlobal, native function injection, GC control, and value factories.">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/cpp-api.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/cpp-api.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/cpp-api.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation">Menu</button>
+      <nav class="site-nav">
+        <a href="index.html">Home</a>
+        <a href="getting-started.html">Getting Started</a>
+        <a href="cli.html">CLI</a>
+        <a class="active" href="cpp-api.html">C++ API</a>
+        <a href="javascript.html">JavaScript</a>
+        <a href="extensions.html">Extensions</a>
+        <a class="lang-switch" href="cpp-api.zh-CN.html">中文</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.html">Home</a> / C++ API</nav>
+      <h1>C++ API Reference</h1>
+      <p>Public header: <code>engine.h</code>. All examples use the <code>Emjs::JsEngine</code> class.</p>
+    </header>
+
+    <h2>Create / destroy</h2>
+    <pre><code>// Caller-owned buffer (not freed on destroy)
+char mem[8192];
+JsEngine* js = JsEngine::create(mem, sizeof(mem));
+JsEngine::destroy(js);
+
+// Engine-owned buffer (freed on destroy)
+JsEngine* js2 = JsEngine::create(8192);
+JsEngine::destroy(js2);</code></pre>
+
+    <h2>Evaluate JavaScript</h2>
+    <pre><code>JsValue v = js->eval("1+2+3");
+const char* s = js->str(v); // "6" or error message</code></pre>
+
+    <h2>callGlobal — faster than eval call strings</h2>
+    <pre><code>js->eval("function add(a,b){return a+b;};");
+
+JsValue argv[2] = {JsEngine::makeNumber(10), JsEngine::makeNumber(32)};
+JsValue r1 = js->callGlobal("add", argv, 2); // 42
+
+JsValue r2 = js->callGlobal("add", {
+  JsEngine::makeNumber(1),
+  JsEngine::makeNumber(2),
+}); // 3</code></pre>
+    <p>Error cases: <code>bad call</code>, <code>'name' not found</code>, <code>'name' not callable</code>.</p>
+
+    <h2>Inject native C++ functions</h2>
+    <pre><code>JsValue add(JsEngine* js, JsValue* args, int nargs) {
+  if (!JsEngine::chkArgs(args, nargs, "dd"))
+    return js->makeError("type mismatch");
+  return JsEngine::makeNumber(
+      JsEngine::getNumber(args[0]) + JsEngine::getNumber(args[1]));
+}
+
+js->set(js->glob(), "add", JsEngine::makeFunction(add));</code></pre>
+
+    <h3>chkArgs format characters</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Char</th><th>Type</th></tr></thead>
+        <tbody>
+          <tr><td><code>d</code></td><td>number</td></tr>
+          <tr><td><code>b</code></td><td>boolean</td></tr>
+          <tr><td><code>s</code></td><td>string</td></tr>
+          <tr><td><code>j</code></td><td>any JS value</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Value factories</h2>
+    <ul>
+      <li><code>makeUndefined()</code>, <code>makeNull()</code>, <code>makeTrue()</code>, <code>makeFalse()</code></li>
+      <li><code>makeNumber(double)</code>, <code>makeString(data, len)</code></li>
+      <li><code>makeFunction(NativeFunction)</code>, <code>makeObject()</code></li>
+      <li><code>makeError(format, ...)</code></li>
+    </ul>
+
+    <h2>Runtime controls</h2>
+    <pre><code>js->setGcThreshold(1024);
+js->setMaxCss(5000);
+js->gc();
+
+size_t total=0, lwm=0, css=0;
+js->stats(&total, &lwm, &css);</code></pre>
+
+    <h2>Object property access</h2>
+    <pre><code>JsValue obj = js->makeObject();
+js->set(obj, "answer", JsEngine::makeNumber(42));
+js->set(js->glob(), "cfg", obj);</code></pre>
+
+    <div class="note">Bind optional modules (<code>console</code>, <code>Math</code>, etc.) at runtime — see <a href="extensions.html">Extensions</a>.</div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — C++ API</div>
+      <div class="footer-links"><a href="javascript.html">JavaScript</a><a href="extensions.html">Extensions</a></div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

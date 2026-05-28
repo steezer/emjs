@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs JavaScript Features — Syntax, Closures &amp; Limits</title>
+  <meta name="description" content="JavaScript language support in Emjs: let/const, operators, control flow, functions, arrow functions, closures, array methods, and known unsupported features.">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/javascript.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/javascript.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/javascript.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation">Menu</button>
+      <nav class="site-nav">
+        <a href="index.html">Home</a>
+        <a href="getting-started.html">Getting Started</a>
+        <a href="cli.html">CLI</a>
+        <a href="cpp-api.html">C++ API</a>
+        <a class="active" href="javascript.html">JavaScript</a>
+        <a href="extensions.html">Extensions</a>
+        <a class="lang-switch" href="javascript.zh-CN.html">中文</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.html">Home</a> / JavaScript</nav>
+      <h1>JavaScript Language Support</h1>
+      <p>Capabilities aligned with <code>src/core.cpp</code> and <code>src/internal.cpp</code>. Explicit semicolons are recommended in production scripts.</p>
+    </header>
+
+    <h2>Literals &amp; types</h2>
+    <pre><code>undefined; null; true; false;
+123; 3.14; 0x10;
+"abc"; 'xyz';
+({a:1, b:2});
+[1, 2, 3];</code></pre>
+
+    <h2>Variables</h2>
+    <ul>
+      <li><code>let</code> and <code>const</code> (not <code>var</code>)</li>
+      <li>Compound assignment: <code>+= -= *= /= %=</code> and bitwise variants</li>
+      <li>Postfix <code>i++</code> / <code>i--</code></li>
+      <li>Reassigning <code>const</code> throws <code>assignment to constant</code></li>
+    </ul>
+
+    <h2>Operators</h2>
+    <p>Arithmetic (<code>+ - * / % **</code>), bitwise, comparison, loose/strict equality, logical, ternary, and <code>typeof</code>.</p>
+
+    <h2>Control flow</h2>
+    <p><code>if/else</code>, <code>for</code>, <code>while</code>, <code>do...while</code>, <code>switch</code>, <code>break</code>, <code>continue</code>, <code>try/catch/finally</code>, <code>throw</code>, <code>return</code>.</p>
+
+    <h2>Functions &amp; closures</h2>
+    <ul>
+      <li>Function declarations and expressions, IIFE</li>
+      <li>Arrow functions: <code>x =&gt; x*2</code>, <code>(a,b) =&gt; a+b</code>, block bodies</li>
+      <li>Lexical closures — nested functions capture defining scope</li>
+      <li><code>for (let i = 0; ...)</code> creates a per-iteration binding (loop closure works correctly)</li>
+    </ul>
+    <pre><code>// Closure example
+function a() {
+  let x = 1;
+  function b() {
+    let y = 2;
+    return function c() { return x + y; };
+  }
+  return b();
+}
+a()(); // 3
+
+// Loop closure
+let funcs = [];
+for (let i = 0; i &lt; 3; i++) {
+  funcs[i] = function() { return i; };
+}
+funcs[0](); // 0</code></pre>
+
+    <h2>Core built-ins (no extensions)</h2>
+    <h3>String methods</h3>
+    <p><code>length</code>, <code>charCodeAt</code>, <code>charAt</code>, <code>indexOf</code>, <code>substring</code></p>
+    <h3>Array methods</h3>
+    <p><code>push</code>, <code>pop</code>, <code>shift</code>, <code>slice</code>, <code>reverse</code>, <code>sort</code>, <code>splice</code>, <code>forEach</code>, <code>map</code>, <code>every</code>, <code>some</code>, <code>find</code>, <code>findIndex</code>, <code>reduce</code>, <code>indexOf</code>, <code>join</code></p>
+
+    <h2>Unsupported (current)</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Feature</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>var</code>, <code>class</code>, <code>new</code></td><td>Parse / runtime error</td></tr>
+          <tr><td><code>this</code>, <code>delete</code>, <code>with</code></td><td>Not implemented</td></tr>
+          <tr><td><code>yield</code>, <code>void</code>, <code>in</code>, <code>instanceof</code></td><td>Not implemented</td></tr>
+          <tr><td>ES modules, Promise, prototype chain</td><td>Not supported</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Common errors</h2>
+    <p><code>parse error</code>, <code>; expected</code>, <code>type mismatch</code>, <code>'xxx' not found</code>, <code>oom</code>, <code>C stack</code> — most include <code>at line N col M</code>.</p>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — JavaScript</div>
+      <div class="footer-links"><a href="extensions.html">Extensions</a><a href="cpp-api.html">C++ API</a></div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

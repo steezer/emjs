@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs 命令行工具 — 运行脚本与交互式 REPL</title>
+  <meta name="description" content="使用 emjs 命令行工具执行 JavaScript 文件、启动带历史记录的交互式 REPL，或通过 stdin 管道输入脚本。">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/cli.zh-CN.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/cli.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/cli.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.zh-CN.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="打开导航">菜单</button>
+      <nav class="site-nav">
+        <a href="index.zh-CN.html">首页</a>
+        <a href="getting-started.zh-CN.html">快速开始</a>
+        <a class="active" href="cli.zh-CN.html">命令行</a>
+        <a href="cpp-api.zh-CN.html">C++ API</a>
+        <a href="javascript.zh-CN.html">JavaScript</a>
+        <a href="extensions.zh-CN.html">扩展模块</a>
+        <a class="lang-switch" href="cli.html">English</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.zh-CN.html">首页</a> / 命令行</nav>
+      <h1>命令行工具（<code>emjs</code>）</h1>
+      <p>类似 Node.js 的 CLI，用于运行 JavaScript 文件和交互式求值 — 仅依赖 C++ 标准库实现。</p>
+    </header>
+
+    <h2>用法</h2>
+    <pre><code>emjs &lt;script.js&gt;    # 运行脚本文件
+emjs -h               # 显示帮助
+emjs --help
+emjs                  # 交互式 REPL（stdin）</code></pre>
+
+    <h2>运行脚本</h2>
+    <pre><code>./build/emjs ./tests/script/types.js</code></pre>
+
+    <h2>管道输入</h2>
+    <pre><code>printf '%s\n' '1+2' 'let x=5; x+1;' | ./build/emjs</code></pre>
+
+    <h2>交互式 REPL</h2>
+    <p>不带参数启动时，<code>emjs</code> 进入交互模式：</p>
+    <ul>
+      <li>输入 JavaScript 代码后按 Enter 执行</li>
+      <li>左右方向键移动光标</li>
+      <li>上下方向键浏览命令历史</li>
+      <li>Backspace 删除光标前字符</li>
+      <li>Ctrl+C 退出 REPL</li>
+    </ul>
+
+    <h2>CLI 中的扩展模块</h2>
+    <p>CLI 在启动时会根据 CMake 编译选项（<code>BUILD_CONSOLE</code>、<code>BUILD_MATH</code> 等）自动绑定扩展模块，因此启用后可直接使用 <code>console.log</code>、<code>Math</code>、<code>JSON</code> 等。</p>
+
+    <h2>安装到 PATH</h2>
+    <pre><code>cmake --install build --prefix /usr/local
+export PATH="/usr/local/bin:$PATH"
+emjs --help</code></pre>
+
+    <div class="note">若要在自有程序中嵌入引擎而非使用 CLI，请参阅 <a href="cpp-api.zh-CN.html">C++ API</a> 页面。</div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — 命令行</div>
+      <div class="footer-links"><a href="getting-started.zh-CN.html">快速开始</a><a href="cpp-api.zh-CN.html">C++ API</a></div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

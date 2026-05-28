@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs C++ API — eval、callGlobal 与原生绑定</title>
+  <meta name="description" content="Emjs JsEngine C++ API 参考：创建/销毁、eval、callGlobal、原生函数注入、GC 控制与值工厂方法。">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/cpp-api.zh-CN.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/cpp-api.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/cpp-api.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.zh-CN.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="打开导航">菜单</button>
+      <nav class="site-nav">
+        <a href="index.zh-CN.html">首页</a>
+        <a href="getting-started.zh-CN.html">快速开始</a>
+        <a href="cli.zh-CN.html">命令行</a>
+        <a class="active" href="cpp-api.zh-CN.html">C++ API</a>
+        <a href="javascript.zh-CN.html">JavaScript</a>
+        <a href="extensions.zh-CN.html">扩展模块</a>
+        <a class="lang-switch" href="cpp-api.html">English</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.zh-CN.html">首页</a> / C++ API</nav>
+      <h1>C++ API 参考</h1>
+      <p>公开头文件：<code>engine.h</code>。以下示例均使用 <code>Emjs::JsEngine</code> 类。</p>
+    </header>
+
+    <h2>创建 / 销毁</h2>
+    <pre><code>// 调用方提供缓冲区（destroy 时不释放）
+char mem[8192];
+JsEngine* js = JsEngine::create(mem, sizeof(mem));
+JsEngine::destroy(js);
+
+// 引擎内部分配（destroy 时释放）
+JsEngine* js2 = JsEngine::create(8192);
+JsEngine::destroy(js2);</code></pre>
+
+    <h2>执行 JavaScript</h2>
+    <pre><code>JsValue v = js->eval("1+2+3");
+const char* s = js->str(v); // "6" 或错误信息</code></pre>
+
+    <h2>callGlobal — 比 eval 调用字符串更高效</h2>
+    <pre><code>js->eval("function add(a,b){return a+b;};");
+
+JsValue argv[2] = {JsEngine::makeNumber(10), JsEngine::makeNumber(32)};
+JsValue r1 = js->callGlobal("add", argv, 2); // 42
+
+JsValue r2 = js->callGlobal("add", {
+  JsEngine::makeNumber(1),
+  JsEngine::makeNumber(2),
+}); // 3</code></pre>
+    <p>错误情况：<code>bad call</code>、<code>'name' not found</code>、<code>'name' not callable</code>。</p>
+
+    <h2>注入原生 C++ 函数</h2>
+    <pre><code>JsValue add(JsEngine* js, JsValue* args, int nargs) {
+  if (!JsEngine::chkArgs(args, nargs, "dd"))
+    return js->makeError("type mismatch");
+  return JsEngine::makeNumber(
+      JsEngine::getNumber(args[0]) + JsEngine::getNumber(args[1]));
+}
+
+js->set(js->glob(), "add", JsEngine::makeFunction(add));</code></pre>
+
+    <h3>chkArgs 格式字符</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>字符</th><th>类型</th></tr></thead>
+        <tbody>
+          <tr><td><code>d</code></td><td>number</td></tr>
+          <tr><td><code>b</code></td><td>boolean</td></tr>
+          <tr><td><code>s</code></td><td>string</td></tr>
+          <tr><td><code>j</code></td><td>任意 JS 值</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>值工厂方法</h2>
+    <ul>
+      <li><code>makeUndefined()</code>、<code>makeNull()</code>、<code>makeTrue()</code>、<code>makeFalse()</code></li>
+      <li><code>makeNumber(double)</code>、<code>makeString(data, len)</code></li>
+      <li><code>makeFunction(NativeFunction)</code>、<code>makeObject()</code></li>
+      <li><code>makeError(format, ...)</code></li>
+    </ul>
+
+    <h2>运行时控制</h2>
+    <pre><code>js->setGcThreshold(1024);
+js->setMaxCss(5000);
+js->gc();
+
+size_t total=0, lwm=0, css=0;
+js->stats(&total, &lwm, &css);</code></pre>
+
+    <h2>对象属性</h2>
+    <pre><code>JsValue obj = js->makeObject();
+js->set(obj, "answer", JsEngine::makeNumber(42));
+js->set(js->glob(), "cfg", obj);</code></pre>
+
+    <div class="note">运行时绑定可选模块（<code>console</code>、<code>Math</code> 等）请参阅 <a href="extensions.zh-CN.html">扩展模块</a>。</div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — C++ API</div>
+      <div class="footer-links"><a href="javascript.zh-CN.html">JavaScript</a><a href="extensions.zh-CN.html">扩展模块</a></div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

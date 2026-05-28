@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs — Lightweight Embedded JavaScript Engine (C++17)</title>
+  <meta name="description" content="Emjs is a lightweight JavaScript interpreter for embedded systems. Direct interpretation, fixed memory buffer, C++17 API, CLI tool, closures, arrow functions, and optional extensions.">
+  <meta name="keywords" content="Emjs, embedded JavaScript, JavaScript engine, C++ interpreter, MCU scripting, lightweight JS, emjs CLI">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/index.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/index.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/index.zh-CN.html">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Emjs — Lightweight Embedded JavaScript Engine">
+  <meta property="og:description" content="A tiny JavaScript interpreter for firmware, tools, and embedded C++ applications.">
+  <meta property="og:url" content="https://steezer.github.io/emjs/doc/index.html">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="assets/style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Emjs",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Cross-platform",
+    "programmingLanguage": "C++",
+    "softwareVersion": "1.0.0",
+    "description": "Lightweight JavaScript interpreter for embedded scenarios with direct interpretation and fixed memory model.",
+    "url": "https://steezer.github.io/emjs/doc/",
+    "codeRepository": "https://github.com/steezer/emjs"
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html">
+        <span class="brand-mark">EJ</span>
+        <span>Emjs</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation">Menu</button>
+      <nav class="site-nav" aria-label="Main">
+        <a class="active" href="index.html">Home</a>
+        <a href="getting-started.html">Getting Started</a>
+        <a href="cli.html">CLI</a>
+        <a href="cpp-api.html">C++ API</a>
+        <a href="javascript.html">JavaScript</a>
+        <a href="extensions.html">Extensions</a>
+        <a class="lang-switch" href="index.zh-CN.html">中文</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <h1>JavaScript for embedded C++ — small, direct, predictable</h1>
+          <p class="lead">
+            Emjs is a lightweight JavaScript interpreter designed for firmware, tooling,
+            and resource-constrained environments. It interprets source directly (no bytecode VM)
+            and runs inside a fixed memory buffer you control.
+          </p>
+          <div class="hero-badges">
+            <span class="badge">C++17</span>
+            <span class="badge">Direct interpretation</span>
+            <span class="badge">Fixed memory</span>
+            <span class="badge">Closures &amp; arrow functions</span>
+            <span class="badge">Static libraries</span>
+          </div>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="getting-started.html">Get Started</a>
+            <a class="btn btn-secondary" href="https://github.com/steezer/emjs" rel="noopener">View on GitHub</a>
+          </div>
+        </div>
+        <aside class="hero-card" aria-label="Quick example">
+          <pre><code>#include "engine.h"
+char mem[4096] = {0};
+JsEngine* js = JsEngine::create(mem, sizeof(mem));
+
+JsValue r = js->eval("let x=3; let y=4; x*y+1;");
+std::printf("%s\n", js->str(r)); // 13
+
+JsEngine::destroy(js);</code></pre>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2 class="section-title">Why Emjs?</h2>
+        <p class="section-desc">
+          Emjs targets scenarios where V8 or QuickJS would be too heavy, but you still want
+          real JavaScript logic inside a C++ application.
+        </p>
+        <div class="card-grid">
+          <article class="card">
+            <h3>Embedded-first design</h3>
+            <p>Run in a caller-provided buffer or a single malloc block. GC threshold and C-stack limits are configurable.</p>
+          </article>
+          <article class="card">
+            <h3>Simple integration</h3>
+            <p>Two static libraries (<code>emjs-core</code>, <code>emjs-exts</code>), a clean <code>JsEngine</code> API, and optional native function binding.</p>
+          </article>
+          <article class="card">
+            <h3>Node-like CLI</h3>
+            <p>The <code>emjs</code> executable runs scripts, supports REPL mode, and ships with common extensions enabled at build time.</p>
+          </article>
+          <article class="card">
+            <h3>Modern JS subset</h3>
+            <p><code>let</code>/<code>const</code>, arrow functions, closures, array methods, try/catch, and more — documented against source code.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2 class="section-title">Documentation</h2>
+        <p class="section-desc">Browse topic pages for build instructions, API reference, language support, and extensions.</p>
+        <div class="card-grid">
+          <a class="card" href="getting-started.html">
+            <h3>Getting Started</h3>
+            <p>Build with CMake, install libraries, and embed Emjs in your first C++ program.</p>
+          </a>
+          <a class="card" href="cli.html">
+            <h3>CLI Tool</h3>
+            <p>Run scripts, use interactive REPL, and install the <code>emjs</code> command.</p>
+          </a>
+          <a class="card" href="cpp-api.html">
+            <h3>C++ API</h3>
+            <p><code>eval</code>, <code>callGlobal</code>, native bindings, GC controls, and value helpers.</p>
+          </a>
+          <a class="card" href="javascript.html">
+            <h3>JavaScript Features</h3>
+            <p>Supported syntax, operators, control flow, functions, closures, and limitations.</p>
+          </a>
+          <a class="card" href="extensions.html">
+            <h3>Extension Modules</h3>
+            <p>Optional <code>console</code>, <code>Math</code>, <code>JSON</code>, <code>Date</code>, and more.</p>
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <strong>Emjs</strong> v1.0.0 — lightweight embedded JavaScript engine
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/steezer/emjs">GitHub</a>
+        <a href="getting-started.html">Getting Started</a>
+        <a href="sitemap.xml">Sitemap</a>
+        <a href="index.zh-CN.html">中文</a>
+      </div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

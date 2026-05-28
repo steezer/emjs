@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs — 轻量级嵌入式 JavaScript 引擎（C++17）</title>
+  <meta name="description" content="Emjs 是面向嵌入式场景的轻量级 JavaScript 解释器。直接解释执行、固定内存缓冲区、C++17 API、命令行工具、闭包与箭头函数、可选扩展模块。">
+  <meta name="keywords" content="Emjs, 嵌入式 JavaScript, JavaScript 引擎, C++ 解释器, MCU 脚本, 轻量 JS, emjs 命令行">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/index.zh-CN.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/index.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/index.zh-CN.html">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Emjs — 轻量级嵌入式 JavaScript 引擎">
+  <meta property="og:description" content="适用于固件、工具链与嵌入式 C++ 应用的微型 JavaScript 解释器。">
+  <meta property="og:url" content="https://steezer.github.io/emjs/doc/index.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Emjs",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Cross-platform",
+    "programmingLanguage": "C++",
+    "softwareVersion": "1.0.0",
+    "description": "面向嵌入式场景的轻量级 JavaScript 解释器，直接解释执行，固定内存模型。",
+    "url": "https://steezer.github.io/emjs/doc/index.zh-CN.html",
+    "codeRepository": "https://github.com/steezer/emjs",
+    "inLanguage": "zh-CN"
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.zh-CN.html">
+        <span class="brand-mark">EJ</span>
+        <span>Emjs</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-label="打开导航">菜单</button>
+      <nav class="site-nav" aria-label="主导航">
+        <a class="active" href="index.zh-CN.html">首页</a>
+        <a href="getting-started.zh-CN.html">快速开始</a>
+        <a href="cli.zh-CN.html">命令行</a>
+        <a href="cpp-api.zh-CN.html">C++ API</a>
+        <a href="javascript.zh-CN.html">JavaScript</a>
+        <a href="extensions.zh-CN.html">扩展模块</a>
+        <a class="lang-switch" href="index.html">English</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <h1>嵌入式 C++ 的 JavaScript 引擎 — 小巧、直接、可控</h1>
+          <p class="lead">
+            Emjs 是面向固件、工具链和资源受限环境的轻量级 JavaScript 解释器。
+            它直接解释源码（无字节码虚拟机），并在您指定的固定内存缓冲区中运行。
+          </p>
+          <div class="hero-badges">
+            <span class="badge">C++17</span>
+            <span class="badge">直接解释执行</span>
+            <span class="badge">固定内存</span>
+            <span class="badge">闭包与箭头函数</span>
+            <span class="badge">静态库</span>
+          </div>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="getting-started.zh-CN.html">快速开始</a>
+            <a class="btn btn-secondary" href="https://github.com/steezer/emjs" rel="noopener">GitHub 仓库</a>
+          </div>
+        </div>
+        <aside class="hero-card" aria-label="示例代码">
+          <pre><code>#include "engine.h"
+char mem[4096] = {0};
+JsEngine* js = JsEngine::create(mem, sizeof(mem));
+
+JsValue r = js->eval("let x=3; let y=4; x*y+1;");
+std::printf("%s\n", js->str(r)); // 13
+
+JsEngine::destroy(js);</code></pre>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2 class="section-title">为什么选择 Emjs？</h2>
+        <p class="section-desc">
+          当 V8 或 QuickJS 体积过大，但您仍需要在 C++ 应用中运行 JavaScript 逻辑时，Emjs 是一个务实的选择。
+        </p>
+        <div class="card-grid">
+          <article class="card">
+            <h3>嵌入式优先</h3>
+            <p>支持外部缓冲区或内部 malloc 创建引擎，GC 阈值与 C 栈深度均可配置。</p>
+          </article>
+          <article class="card">
+            <h3>集成简单</h3>
+            <p>两个静态库（<code>emjs-core</code>、<code>emjs-exts</code>），清晰的 <code>JsEngine</code> API，以及原生函数注入能力。</p>
+          </article>
+          <article class="card">
+            <h3>类 Node 命令行</h3>
+            <p><code>emjs</code> 可执行文件支持脚本执行、交互式 REPL，构建时可启用常用扩展。</p>
+          </article>
+          <article class="card">
+            <h3>现代 JS 子集</h3>
+            <p>支持 <code>let</code>/<code>const</code>、箭头函数、闭包、数组方法、try/catch 等，文档与源码对齐。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2 class="section-title">文档导航</h2>
+        <p class="section-desc">按主题浏览构建说明、API 参考、语言特性与扩展模块。</p>
+        <div class="card-grid">
+          <a class="card" href="getting-started.zh-CN.html">
+            <h3>快速开始</h3>
+            <p>使用 CMake 构建、安装库文件，并在 C++ 项目中嵌入 Emjs。</p>
+          </a>
+          <a class="card" href="cli.zh-CN.html">
+            <h3>命令行工具</h3>
+            <p>运行脚本、交互式 REPL、安装 <code>emjs</code> 命令。</p>
+          </a>
+          <a class="card" href="cpp-api.zh-CN.html">
+            <h3>C++ API</h3>
+            <p><code>eval</code>、<code>callGlobal</code>、原生绑定、GC 控制与值类型辅助函数。</p>
+          </a>
+          <a class="card" href="javascript.zh-CN.html">
+            <h3>JavaScript 特性</h3>
+            <p>支持的语法、运算符、控制流、函数、闭包与限制说明。</p>
+          </a>
+          <a class="card" href="extensions.zh-CN.html">
+            <h3>扩展模块</h3>
+            <p>可选的 <code>console</code>、<code>Math</code>、<code>JSON</code>、<code>Date</code> 等模块。</p>
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <strong>Emjs</strong> v1.0.0 — 轻量级嵌入式 JavaScript 引擎
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/steezer/emjs">GitHub</a>
+        <a href="getting-started.zh-CN.html">快速开始</a>
+        <a href="sitemap.xml">站点地图</a>
+        <a href="index.html">English</a>
+      </div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

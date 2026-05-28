@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs CLI — Run Scripts &amp; Interactive REPL</title>
+  <meta name="description" content="Use the emjs command-line tool to execute JavaScript files, start an interactive REPL with history, and pipe scripts from stdin.">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/cli.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/cli.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/cli.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation">Menu</button>
+      <nav class="site-nav">
+        <a href="index.html">Home</a>
+        <a href="getting-started.html">Getting Started</a>
+        <a class="active" href="cli.html">CLI</a>
+        <a href="cpp-api.html">C++ API</a>
+        <a href="javascript.html">JavaScript</a>
+        <a href="extensions.html">Extensions</a>
+        <a class="lang-switch" href="cli.zh-CN.html">中文</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.html">Home</a> / CLI</nav>
+      <h1>Command-Line Tool (<code>emjs</code>)</h1>
+      <p>A Node.js-like CLI for running JavaScript files and interactive evaluation — built with the C++ standard library only.</p>
+    </header>
+
+    <h2>Usage</h2>
+    <pre><code>emjs &lt;script.js&gt;    # run a file
+emjs -h               # show help
+emjs --help
+emjs                  # interactive REPL (stdin)</code></pre>
+
+    <h2>Run a script</h2>
+    <pre><code>./build/emjs ./tests/script/types.js</code></pre>
+
+    <h2>Pipe input</h2>
+    <pre><code>printf '%s\n' '1+2' 'let x=5; x+1;' | ./build/emjs</code></pre>
+
+    <h2>Interactive REPL</h2>
+    <p>When started without arguments, <code>emjs</code> enters interactive mode:</p>
+    <ul>
+      <li>Type JavaScript and press Enter to evaluate</li>
+      <li>Left / right arrow keys move the cursor</li>
+      <li>Up / down arrow keys navigate command history</li>
+      <li>Backspace deletes the character before the cursor</li>
+      <li>Ctrl+C exits the REPL</li>
+    </ul>
+
+    <h2>Extensions in CLI</h2>
+    <p>The CLI binary binds extension modules at startup based on CMake build flags (<code>BUILD_CONSOLE</code>, <code>BUILD_MATH</code>, etc.), so <code>console.log</code>, <code>Math</code>, and <code>JSON</code> are available out of the box when enabled.</p>
+
+    <h2>Install to PATH</h2>
+    <pre><code>cmake --install build --prefix /usr/local
+export PATH="/usr/local/bin:$PATH"
+emjs --help</code></pre>
+
+    <div class="note">For embedding Emjs in your own binary instead of using the CLI, see the <a href="cpp-api.html">C++ API</a> page.</div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — CLI</div>
+      <div class="footer-links"><a href="getting-started.html">Getting Started</a><a href="cpp-api.html">C++ API</a></div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

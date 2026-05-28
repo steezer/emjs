@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emjs 扩展模块 — console、Math、JSON、Date</title>
+  <meta name="description" content="Emjs 可选扩展模块：console、parseInt/parseFloat、String.fromCharCode、Date、Math、JSON。CMake 编译选项与运行时 bind API。">
+  <link rel="canonical" href="https://steezer.github.io/emjs/doc/extensions.zh-CN.html">
+  <link rel="alternate" hreflang="en" href="https://steezer.github.io/emjs/doc/extensions.html">
+  <link rel="alternate" hreflang="zh-CN" href="https://steezer.github.io/emjs/doc/extensions.zh-CN.html">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="index.zh-CN.html"><span class="brand-mark">EJ</span><span>Emjs</span></a>
+      <button class="nav-toggle" type="button" aria-label="打开导航">菜单</button>
+      <nav class="site-nav">
+        <a href="index.zh-CN.html">首页</a>
+        <a href="getting-started.zh-CN.html">快速开始</a>
+        <a href="cli.zh-CN.html">命令行</a>
+        <a href="cpp-api.zh-CN.html">C++ API</a>
+        <a href="javascript.zh-CN.html">JavaScript</a>
+        <a class="active" href="extensions.zh-CN.html">扩展模块</a>
+        <a class="lang-switch" href="extensions.html">English</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container content">
+    <header class="page-header">
+      <nav class="breadcrumb"><a href="index.zh-CN.html">首页</a> / 扩展模块</nav>
+      <h1>扩展模块</h1>
+      <p>可选模块编译进 <code>libemjs-exts.a</code>，运行时需显式 <code>bind</code>（CLI 会自动绑定）。</p>
+    </header>
+
+    <h2>CMake 选项</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>选项</th><th>模块</th></tr></thead>
+        <tbody>
+          <tr><td><code>BUILD_CONSOLE</code></td><td><code>console.*</code></td></tr>
+          <tr><td><code>BUILD_GLOBAL</code></td><td><code>global.*</code>（parseInt、parseFloat）</td></tr>
+          <tr><td><code>BUILD_STRING</code></td><td><code>string.*</code>（String.fromCharCode）</td></tr>
+          <tr><td><code>BUILD_DATE</code></td><td><code>date.*</code></td></tr>
+          <tr><td><code>BUILD_JSON</code></td><td><code>json.*</code></td></tr>
+          <tr><td><code>BUILD_MATH</code></td><td><code>math.*</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>运行时绑定</h2>
+    <pre><code>#include "extension/console.h"
+#include "extension/global.h"
+#include "extension/string.h"
+#include "extension/date.h"
+#include "extension/math.h"
+#include "extension/json.h"
+
+EConsole::bind(js);
+EGlobal::bind(js);
+EString::bind(js);
+EDate::bind(js);
+EMath::bind(js);
+EJson::bind(js);</code></pre>
+
+    <h2>console</h2>
+    <ul>
+      <li><code>console.log(...args)</code></li>
+      <li><code>console.time(label?)</code></li>
+      <li><code>console.timeLog(label, ...args)</code></li>
+      <li><code>console.timeEnd(label?)</code></li>
+    </ul>
+
+    <h2>global</h2>
+    <ul>
+      <li><code>parseInt(str[, radix])</code></li>
+      <li><code>parseFloat(str)</code></li>
+    </ul>
+
+    <h2>String（全局对象）</h2>
+    <ul><li><code>String.fromCharCode(...codes)</code></li></ul>
+
+    <h2>Date</h2>
+    <ul>
+      <li><code>Date.now()</code></li>
+      <li><code>Date.format([timestampMs][, format])</code></li>
+    </ul>
+    <p>默认格式：<code>%Y-%m-%d %H:%i:%s</code></p>
+
+    <h2>Math</h2>
+    <p>常量：<code>E, LN10, LN2, LOG10E, LOG2E, PI, SQRT1_2, SQRT2</code></p>
+    <p>函数：<code>abs acos acosh asin asinh atan atan2 atanh cbrt ceil clz32 cos cosh exp expm1 f16round floor fround hypot imul log log10 log1p log2 max min pow random round sign sin sinh sqrt sumPrecise tan tanh trunc</code></p>
+
+    <h2>JSON</h2>
+    <pre><code>let o = JSON.parse('{"a":1,"b":[2,3]}');
+JSON.stringify(o); // {"a":1,"b":[2,3]}</code></pre>
+
+    <div class="note">核心数组/字符串方法不依赖扩展模块 — 请参阅 <a href="javascript.zh-CN.html">JavaScript 特性</a>。</div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div><strong>Emjs</strong> — 扩展模块</div>
+      <div class="footer-links"><a href="getting-started.zh-CN.html">快速开始</a><a href="cpp-api.zh-CN.html">C++ API</a></div>
+    </div>
+  </footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>
