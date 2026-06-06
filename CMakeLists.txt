@@ -45,7 +45,7 @@ add_library(emjs-exts STATIC ${EJS_EXTENSION_FILES})
 
 if(EMJS_OPTIMIZE_SIZE)
     set(EMJS_SIZE_FLAGS
-        -Oz
+        -Os
         -fno-exceptions
         -fno-rtti
         -fno-unwind-tables

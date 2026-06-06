@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <iostream>
 #include <string>
+#include <cstring>
 #include <unordered_map>
 
 namespace Emjs {
