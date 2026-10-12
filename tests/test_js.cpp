@@ -77,6 +77,15 @@ int runTest(void* buffer, std::size_t length, const char* code)
     
     auto startTime=getTime();
     evalOk(code);
+    
+    std::string strValue="99";
+    std::stod(strValue);
+    auto params={
+            JsEngine::makeNumber(std::stod(strValue)), 
+            JsEngine::makeNumber(12)
+        };
+    js->callGlobal("onData", params);
+    
     std::cout << "Use time: " << (getTime()-startTime)/1000.0 << "ms"<< std::endl;
     
     size_t total, lwm, css;
