@@ -45,6 +45,8 @@ static JsEngine* createState(void* buffer, size_t length, bool ownsBuffer)
     st->lowWatermark = st->memSize;
     st->gcThreshold = (JsOffset)(static_cast<double>(st->memSize) * JS_GC_THRESHOLD);
     st->rootCount = 0;
+    st->rootOverflow = 0;
+    st->arrayHead = 0;
     st->ownsBuffer = ownsBuffer;
     st->bufferSize = length;
     return st;
@@ -134,6 +136,8 @@ JsEngine::~JsEngine()
     maxCss = 0;
     cStackPtr = nullptr;
     rootCount = 0;
+    rootOverflow = 0;
+    arrayHead = 0;
 }
 
 void JsEngine::destroy(JsEngine* engine)
@@ -151,6 +155,12 @@ void JsEngine::destroy(JsEngine* engine)
 
 JsValue JsEngine::eval(const char* code, std::size_t length)
 {
+    // The caller's source buffer may be reused between evals, so cached source
+    // positions from a previous eval are not valid anymore.
+    code_cache_clear(this);
+    // A previous eval may have failed mid-construct and left parser flags
+    // (e.g. kFlagNoExec) set; a top-level eval always starts clean.
+    flags = 0;
     return js_eval(this, code, length);
 }
 
@@ -159,6 +169,7 @@ JsValue JsEngine::callGlobal(const char* functionName, const JsValue* args, int 
     if (argCount < 0) return makeError("bad call");
     if (argCount > 0 && args == nullptr) return makeError("bad call");
     auto* st = reinterpret_cast<JsEngineState*>(this);
+    flags = 0;
     JsValue fn = lookupGlobalCallable(st, functionName);
     if (is_err(fn)) return fn;
     return js_invoke(st, fn, mkundef(), const_cast<JsValue*>(args), argCount);

@@ -15,7 +15,27 @@ enum class JsValueType : int { Undefined = 0, Null, True, False, String, Number,
 // Root slots keep JS values that live in C++ locals across nested statement
 // execution visible to the moving GC. Pointers to those locals are registered
 // so the collector can both trace and relocate them.
-inline constexpr int kJsMaxRoots = 64;
+#ifndef JS_MAX_ROOTS
+#define JS_MAX_ROOTS 16
+#endif
+inline constexpr int kJsMaxRoots = JS_MAX_ROOTS;
+
+// Small identifier intern table. Every binding and parameter name gets a key
+// string; without interning the same name is re-allocated on every function
+// call. Slots hold string-entity offsets and are treated as GC roots, so the
+// table is bounded by kJsInternSlots strings. Must be a power of two.
+#ifndef JS_INTERN_SLOTS
+#define JS_INTERN_SLOTS 32
+#endif
+inline constexpr int kJsInternSlots = JS_INTERN_SLOTS;
+
+// Direct-mapped cache of string literals / function bodies keyed by source
+// position, so re-executing the same literal or closure does not re-allocate
+// (or re-parse) it. Invalidated on GC and at the outermost eval. Power of two.
+#ifndef JS_CODE_CACHE_SLOTS
+#define JS_CODE_CACHE_SLOTS 8
+#endif
+inline constexpr int kJsCodeCacheSlots = JS_CODE_CACHE_SLOTS;
 
 struct JsEngineState {
     JsOffset cStackSize;
@@ -41,6 +61,13 @@ struct JsEngineState {
     void* cStackPtr;
     JsValue* roots[kJsMaxRoots];
     std::uint8_t rootCount;
+    std::uint8_t rootOverflow;  // GC suppressed while roots cannot be tracked
+    JsOffset intern[kJsInternSlots];
+    JsOffset arrayHead;  // head of the array-object list
+    const char* codeCachePtr[kJsCodeCacheSlots];
+    JsOffset codeCacheStr[kJsCodeCacheSlots];
+    JsOffset codeCachePos[kJsCodeCacheSlots];
+    JsOffset codeCacheEnd[kJsCodeCacheSlots];
     bool ownsBuffer;
     std::size_t bufferSize;
 };

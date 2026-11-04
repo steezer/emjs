@@ -120,6 +120,8 @@ void fmt_err(JsEngineState* st, const char* fmt, std::va_list ap);
 const char* strValue(JsEngineState* st, JsValue value);
 bool truthy(JsEngineState* st, JsValue v);
 void runGc(JsEngineState* st);
+// Drop the source-position literal/function cache (entity offsets may be stale).
+void code_cache_clear(JsEngineState* st);
 JsValue js_eval(JsEngine* st, const char* buf, std::size_t len);
 JsValue mkerr(JsEngineState* st, const char* fmt, ...);
 JsValue resolveprop(JsEngineState* st, JsValue v);
@@ -130,7 +132,12 @@ bool streq(const char* buf, std::size_t len, const char* p, std::size_t n);
 void saveval(JsEngineState* st, JsOffset off, JsValue val);
 JsOffset prop_lookup(JsEngineState* st, JsValue obj, const char* key, std::size_t key_len);
 
+// Header flag marking a real array object (bit 30 of the T_OBJ header word).
+// The object's parent field then links it into the engine's array list, which
+// lets index stores find the owning array without scanning the whole heap.
+inline constexpr JsOffset kObjArrayFlag = 0x40000000U;
 JsValue array_create(JsEngineState* st);
+void array_register(JsEngineState* st, JsValue arr);
 bool is_array_obj(JsEngineState* st, JsValue obj);
 void array_set_length(JsEngineState* st, JsValue arr, double len);
 JsValue array_owner_of_prop(JsEngineState* st, JsOffset prop_off);

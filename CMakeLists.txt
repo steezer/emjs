@@ -1,6 +1,8 @@
 cmake_minimum_required (VERSION 3.15)
 project (emjs)
 
+enable_testing()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 if(NOT CMAKE_BUILD_TYPE)
@@ -98,6 +100,13 @@ endif()
 if(EMJS_TESTS)
     add_executable(test_js tests/test_js.cpp)
     target_link_libraries(test_js emjs-core emjs-exts)
+
+    add_executable(unit_test tests/unit_test.cpp)
+    target_link_libraries(unit_test emjs-core)
+
+    add_test(NAME unit_test COMMAND unit_test)
+    set_tests_properties(unit_test PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
     if(EMJS_OPTIMIZE_SIZE)
         if(APPLE)

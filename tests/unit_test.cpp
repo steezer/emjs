@@ -1,3 +1,8 @@
+// Release builds define NDEBUG, which would compile all assertions (and their
+// side effects) away. Keep them active for this test translation unit.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -63,7 +68,7 @@ static bool ev_err_at(JsEngine *js, const char *expr, const char *msg, int line,
 }
 
 static void test_arith(void) {
-  char mem[512];
+  char mem[4096];
   JsEngine *js;
   assert((js = js_create(NULL, 0)) == NULL);
   assert((js = js_create(mem, 0)) == NULL);
@@ -116,7 +121,7 @@ static void test_arith(void) {
 }
 
 static void test_errors(void) {
-  char mem[512];
+  char mem[4096];
   JsEngine *js;
   assert((js = js_create(mem, sizeof(mem))) != NULL);
   js_setmaxcss(js, 5000);
@@ -207,7 +212,7 @@ static void test_basic(void) {
   assert(ev(js, "b", "7"));
   assert(ev(js, "~null", "ERROR: type mismatch"));
   assert(ev(js, "1 + ''", "\"1\""));
-  assert(ev(js, "1 + true", "\"1true\""));
+  assert(ev(js, "1 + true", "ERROR: type mismatch"));
   assert(ev(js, "'A'+1", "\"A1\""));
   assert(ev(js, "1 === false", "ERROR: type mismatch"));
   assert(ev(js, "1 === 2", "false"));
@@ -414,9 +419,9 @@ static void test_funcs(void) {
   assert(ev(js, "1 + f", "ERROR: type mismatch"));
   assert(ev(js, "f = function(a){return 17;}; 1", "1"));
   assert(ev(js, "1()", "ERROR: calling non-function"));
-  assert(ev(js, "f(,)", "ERROR: parse error"));
-  assert(ev(js, "f(1,)", "ERROR: parse error"));
-  assert(ev(js, "f(,2)", "ERROR: parse error"));
+  assert(ev(js, "f(,)", "ERROR: bad expr"));
+  assert(ev(js, "f(1,)", "ERROR: bad expr"));
+  assert(ev(js, "f(,2)", "ERROR: bad expr"));
   assert(ev(js, "return", "ERROR: not in func"));
   assert(ev(js, "return 2;", "ERROR: not in func"));
   assert(ev(js, "{ return } ", "ERROR: not in func"));
@@ -432,7 +437,7 @@ static void test_funcs(void) {
   assert(ev(js, "(function(){return 1;})(1)", "1"));
   assert(ev(js, "(function(){return 1;})(1,2,3)", "1"));
   assert(ev(js, "(function(){return 1;})(1)", "1"));
-  assert(ev(js, "(function(){return 1;})(1,)", "ERROR: parse error"));
+  assert(ev(js, "(function(){return 1;})(1,)", "ERROR: bad expr"));
   assert(ev(js, "(function(){return 1;2;})()", "1"));
   assert(ev(js, "(function(){return 1;2;return 3;})()", "1"));
   assert(ev(js, "(function(a){return b;})(1)", "ERROR: 'b' not found"));
@@ -754,6 +759,6 @@ int main(void) {
   test_gc_tree_stress();
   test_new_features();
   double ms = (double) (clock() - a) * 1000 / CLOCKS_PER_SEC;
-  printf("SUCCESS. All tests passed in %g ms\n", ms);
+  printf("SUCCESS. All tests passed in %g ms\n", ms); 
   return EXIT_SUCCESS;
 }

@@ -173,12 +173,25 @@ static double array_get_length(JsEngineState* st, JsValue arr)
     return vtype(len) == T_NUM ? tod(len) : 0;
 }
 
+void array_register(JsEngineState* st, JsValue arr)
+{
+    if (vtype(arr) != T_OBJ) return;
+    JsOffset off = (JsOffset)vdata(arr);
+    JsOffset h = loadoff(st, off);
+    if (h & kObjArrayFlag) return;
+    JsOffset nh = h | kObjArrayFlag;
+    std::memcpy(&st->memory[off], &nh, sizeof(nh));
+    std::memcpy(&st->memory[off + sizeof(JsOffset)], &st->arrayHead, sizeof(st->arrayHead));
+    st->arrayHead = off;
+}
+
 JsValue array_create(JsEngineState* st)
 {
     JsValue arr = mkobj(st, 0);
     if (is_err(arr)) return arr;
     JsValue r = setprop(st, arr, mkstr(st, "length", 6), tov(0));
     if (is_err(r)) return r;
+    array_register(st, arr);
     return arr;
 }
 
@@ -203,16 +216,14 @@ void array_set_length(JsEngineState* st, JsValue arr, double len)
 
 JsValue array_owner_of_prop(JsEngineState* st, JsOffset prop_off)
 {
-    for (JsOffset n, v, off = 0; off < st->break_; off += n) {
-        v = loadoff(st, off);
-        n = esize(v & ~kGcMask);
-        if ((v & 3) != T_OBJ) continue;
-        JsValue obj = mkval(T_OBJ, off);
-        if (!is_array_obj(st, obj)) continue;
-        for (JsOffset p = loadoff(st, off) & kPropLinkMask; p != 0 && p < st->break_;) {
-            if (p == prop_off) return obj;
-            p = loadoff(st, p) & kPropLinkMask;
+    // Walk the array list instead of every object in the heap.
+    for (JsOffset off = st->arrayHead; off != 0 && off < st->break_;) {
+        if ((loadoff(st, off) & 3) != T_OBJ) break;
+        for (JsOffset p = loadoff(st, (JsOffset)off) & kPropLinkMask; p != 0 && p < st->break_;
+             p = loadoff(st, p) & kPropLinkMask) {
+            if (p == prop_off) return mkval(T_OBJ, off);
         }
+        off = loadoff(st, (JsOffset)(off + sizeof(JsOffset)));
     }
     return mkundef();
 }
@@ -237,16 +248,55 @@ JsValue array_key_from_value(JsEngineState* st, JsValue keyval)
     return mkerr(st, "bad index");
 }
 
+// Format an array index into buf without allocating. Matches the "%.17g"
+// representation used when the property was created, but integer indices take
+// a manual itoa fast path.
+static size_t index_to_chars(double d, char* buf)
+{
+    if (d >= 0 && d <= 9007199254740992.0) {
+        uint64_t v = (uint64_t)d;
+        if ((double)v == d) {
+            char tmp[24];
+            size_t n = 0;
+            do {
+                tmp[n++] = (char)('0' + (v % 10U));
+                v /= 10U;
+            } while (v != 0);
+            for (size_t i = 0; i < n; i++) buf[i] = tmp[n - 1U - i];
+            buf[n] = '\0';
+            return n;
+        }
+    }
+    int n = std::snprintf(buf, 32, "%.17g", d);
+    return n > 0 ? (size_t)n : 0;
+}
+
 JsValue array_bracket_op(JsEngineState* st, JsValue obj, JsValue keyval)
 {
-    JsValue key = array_key_from_value(st, keyval);
-    if (is_err(key)) return key;
+    keyval = resolveprop(st, keyval);
     if (vtype(obj) != T_OBJ) return mkerr(st, "lookup in non-obj");
-    JsOffset koff = (JsOffset)vdata(key);
-    JsOffset klen = (loadoff(st, koff) >> 2) - 1;
-    const char* ptr = (char*)&st->memory[koff + sizeof(koff)];
+    char buf[32];
+    const char* ptr = NULL;
+    JsOffset klen = 0;
+    JsValue key = 0;
+    if (vtype(keyval) == T_STR) {
+        JsOffset koff = (JsOffset)vdata(keyval);
+        klen = (loadoff(st, koff) >> 2) - 1;
+        ptr = (char*)&st->memory[koff + sizeof(koff)];
+        key = keyval;
+    } else if (vtype(keyval) == T_NUM) {
+        // Format on the stack: a read must not allocate a key string.
+        klen = (JsOffset)index_to_chars(tod(keyval), buf);
+        ptr = buf;
+    } else {
+        return mkerr(st, "bad index");
+    }
     JsOffset off = prop_lookup(st, obj, ptr, klen);
     if (off == 0) {
+        if (key == 0) {
+            key = mkstr(st, buf, klen);
+            if (is_err(key)) return key;
+        }
         JsValue res = setprop(st, obj, key, mkundef());
         if (is_err(res)) return res;
         off = prop_lookup(st, obj, ptr, klen);

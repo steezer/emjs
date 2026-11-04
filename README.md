@@ -41,6 +41,7 @@ src/
     string.*                 # String.fromCharCode
 tests/
   test_js.cpp                # script runner with default extension binding
+  unit_test.cpp              # engine unit tests (CTest target)
 ```
 
 ---
@@ -60,8 +61,15 @@ Current CMake targets:
 - `libemjs-core.a`
 - `libemjs-exts.a`
 - `test_js`
+- `unit_test`
 
-> Note: `tests/unit_test.cpp` exists in the repository, but `unit_test` is not enabled as a default CMake target.
+Run the registered tests with:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+`unit_test` is built when `EMJS_TESTS=ON` (the default).
 
 ---
 

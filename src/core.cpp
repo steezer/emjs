@@ -44,11 +44,23 @@ public:
     RootScope(JsEngineState* st, std::initializer_list<JsValue*> values)
         : st_(st), saved_(st->rootCount)
     {
-        for (JsValue* value : values) {
-            if (st_->rootCount < kJsMaxRoots) st_->roots[st_->rootCount++] = value;
+        // GC never runs while parsing or inside a call, so those frames do not
+        // need root slots. Only GC-eligible (top-level statement) frames do,
+        // which keeps the number of live roots - and the slot array - small.
+        if (st_->flags & (kFlagNative | kFlagCall | kFlagNoExec)) return;
+        if (st_->rootCount + values.size() > (size_t)kJsMaxRoots) {
+            // Too deeply nested to track: suppress GC until this scope unwinds.
+            st_->rootOverflow++;
+            overflowed_ = true;
+            return;
         }
+        for (JsValue* value : values) st_->roots[st_->rootCount++] = value;
     }
-    ~RootScope() { st_->rootCount = saved_; }
+    ~RootScope()
+    {
+        st_->rootCount = saved_;
+        if (overflowed_) st_->rootOverflow--;
+    }
 
     RootScope(const RootScope&) = delete;
     RootScope& operator=(const RootScope&) = delete;
@@ -56,6 +68,7 @@ public:
 private:
     JsEngineState* st_;
     std::uint8_t saved_;
+    bool overflowed_ = false;
 };
 
 // A JS memory stores diffenent entities: objects, properties, strings
@@ -310,6 +323,68 @@ static inline JsValue mkfunc(JsEngineState* st, JsValue str)
     JsOffset soff = (JsOffset)vdata(str);
     JsOffset scoff = (JsOffset)vdata(st->scope);
     return mkval(T_FUNC, ((JsValue)(scoff & kFuncOffMask) << 24U) | (soff & kFuncOffMask));
+}
+
+// Return an interned string entity for the given bytes, allocating and
+// registering it on first use. Used for identifier/property keys, which are
+// otherwise re-allocated on every binding, call or object literal.
+static JsValue js_intern(JsEngineState* st, const void* ptr, size_t len)
+{
+    const uint8_t* p = (const uint8_t*)ptr;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; i++) h = (h ^ p[i]) * 16777619u;
+    const uint32_t mask = (uint32_t)kJsInternSlots - 1U;
+    for (uint32_t i = 0; i < (uint32_t)kJsInternSlots; i++) {
+        JsOffset& slot = st->intern[(h + i) & mask];
+        if (slot == 0) {
+            JsValue v = mkstr(st, ptr, len);
+            if (!is_err(v)) slot = (JsOffset)vdata(v);
+            return v;
+        }
+        JsOffset klen = offtolen(loadoff(st, slot));
+        const char* kp = (char*)&st->memory[slot + sizeof(JsOffset)];
+        if (klen == len && (len == 0 || memcmp(kp, ptr, len) == 0)) return mkval(T_STR, slot);
+    }
+    return mkstr(st, ptr, len);  // Table full: fall back to a new allocation.
+}
+
+// Direct-mapped source-position cache for string literals and function bodies.
+// Entries are weak: they are dropped on GC (entities may move/be collected) and
+// at the outermost eval (the caller's source buffer may be gone or reused).
+static JsOffset js_code_cache_index(const char* code, JsOffset pos)
+{
+    return (JsOffset)((((uintptr_t)code >> 3) ^ pos) & (kJsCodeCacheSlots - 1));
+}
+
+static JsValue js_code_cache_get(JsEngineState* st, const char* code, JsOffset pos, JsOffset* end)
+{
+    JsOffset i = js_code_cache_index(code, pos);
+    if (st->codeCacheStr[i] != 0 && st->codeCachePtr[i] == code && st->codeCachePos[i] == pos) {
+        if (end) *end = st->codeCacheEnd[i];
+        return mkval(T_STR, st->codeCacheStr[i]);
+    }
+    return 0;
+}
+
+static void js_code_cache_put(JsEngineState* st, const char* code, JsOffset pos, JsOffset end,
+                              JsValue str)
+{
+    if (is_err(str)) return;
+    JsOffset i = js_code_cache_index(code, pos);
+    st->codeCacheStr[i] = (JsOffset)vdata(str);
+    st->codeCachePtr[i] = code;
+    st->codeCachePos[i] = pos;
+    st->codeCacheEnd[i] = end;
+}
+
+static void js_code_cache_clear(JsEngineState* st)
+{
+    memset(st->codeCacheStr, 0, sizeof(st->codeCacheStr));
+}
+
+void internal::code_cache_clear(JsEngineState* st)
+{
+    js_code_cache_clear(st);
 }
 
 static JsOffset func_vstr(JsEngineState* st, JsValue fn, JsOffset* len)
@@ -573,6 +648,19 @@ static void js_delete_marked_entities(JsEngineState* st)
     }
 }
 
+// Dead array objects may have been removed; relink the array list so it only
+// contains surviving arrays (array headers carry kObjArrayFlag in bit 30).
+static void js_rebuild_array_list(JsEngineState* st)
+{
+    st->arrayHead = 0;
+    for (JsOffset v, off = 0; off < st->break_; off += esize(v & ~GCMASK)) {
+        v = loadoff(st, off);
+        if ((v & 3U) != T_OBJ || (v & kObjArrayFlag) == 0) continue;
+        saveoff(st, (JsOffset)(off + sizeof(JsOffset)), st->arrayHead);
+        st->arrayHead = off;
+    }
+}
+
 static void js_mark_all_entities_for_deletion(JsEngineState* st)
 {
     for (JsOffset v, off = 0; off < st->break_; off += esize(v & ~GCMASK)) {
@@ -832,11 +920,10 @@ static void scope_copy_props(JsEngineState* st, JsValue src, JsValue dst)
     JsOffset off = loadoff(st, (JsOffset)vdata(src)) & kPropLinkMask;
     while (off != 0 && off < st->break_) {
         JsOffset koff = loadoff(st, (JsOffset)(off + sizeof(off)));
-        JsOffset klen = (loadoff(st, koff) >> 2) - 1;
-        const char* p = (char*)&st->memory[koff + sizeof(koff)];
         JsValue val = resolveprop(st, loadval(st, (JsOffset)(off + sizeof(off) + sizeof(off))));
         JsOffset pflags = loadoff(st, off) & kPropConst;
-        setprop(st, dst, mkstr(st, p, klen), val, pflags);
+        // Reuse the key entity instead of copying the name for every iteration.
+        setprop(st, dst, mkval(T_STR, koff), val, pflags);
         off = loadoff(st, off) & kPropLinkMask;
     }
 }
@@ -1133,7 +1220,14 @@ static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, Js
         uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
         if (tok != TOK_IDENTIFIER) break;
         JsValue v = argi < argc ? args[argi++] : mkundef();
-        setprop(st, st->scope, mkstr(st, &fn[fnpos], identlen), v);
+        // Parameter names are at a fixed source position: cache the key entity
+        // instead of hashing/interning the same name on every call.
+        JsValue key = js_code_cache_get(st, fn, fnpos, NULL);
+        if (key == 0) {
+            key = js_intern(st, &fn[fnpos], identlen);
+            js_code_cache_put(st, fn, fnpos, 0, key);
+        }
+        setprop(st, st->scope, key, v);
         fnpos = skiptonext(fn, fnlen, fnpos + identlen);
         if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
     }
@@ -1273,6 +1367,8 @@ static JsValue do_op(JsEngineState *st, uint8_t op, JsValue lhs, JsValue rhs)
 
 static JsValue js_str_literal(JsEngineState* st)
 {
+    JsValue cached = js_code_cache_get(st, st->code, st->tokenOffset, NULL);
+    if (cached != 0) return cached;
     uint8_t* in = (uint8_t*)&st->code[st->tokenOffset];
     uint8_t* out = &st->memory[st->break_ + sizeof(JsOffset)];
     size_t n1 = 0, n2 = 0;
@@ -1299,7 +1395,9 @@ static JsValue js_str_literal(JsEngineState* st)
             out[n1++] = ((uint8_t*)st->code)[st->tokenOffset + n2];
         }
     }
-    return mkstr(st, NULL, n1);
+    JsValue v = mkstr(st, NULL, n1);
+    js_code_cache_put(st, st->code, st->tokenOffset, 0, v);
+    return v;
 }
 
 static JsValue js_obj_literal(JsEngineState* st)
@@ -1312,7 +1410,7 @@ static JsValue js_obj_literal(JsEngineState* st)
     while (next(st) != TOK_RBRACE) {
         JsValue key = 0;
         if (st->token == TOK_IDENTIFIER) {
-            if (exe) key = mkstr(st, st->code + st->tokenOffset, st->tokenLen);
+            if (exe) key = js_intern(st, st->code + st->tokenOffset, st->tokenLen);
         } else if (st->token == TOK_STRING) {
             if (exe) key = js_str_literal(st);
         } else {
@@ -1478,6 +1576,13 @@ static JsValue js_func_body(JsEngineState* st)
     uint8_t flags = st->flags;
     EXPECT(TOK_LPAREN, st->flags = flags);
     JsOffset pos = st->position - 1;
+    JsOffset end = 0;
+    JsValue cached = js_code_cache_get(st, st->code, pos, &end);
+    if (cached != 0) {
+        st->position = end;
+        st->consumed = 1;
+        return mkfunc(st, cached);
+    }
     for (bool comma = false; next(st) != TOK_EOF; comma = true) {
         if (!comma && next(st) == TOK_RPAREN) break;
         EXPECT(TOK_IDENTIFIER, st->flags = flags);
@@ -1497,6 +1602,7 @@ static JsValue js_func_body(JsEngineState* st)
     }
     st->flags = flags;
     JsValue str = mkstr(st, &st->code[pos], st->position - pos);
+    js_code_cache_put(st, st->code, pos, st->position, str);
     st->consumed = 1;
     return mkfunc(st, str);
 }
@@ -1518,7 +1624,7 @@ static JsValue js_func_decl(JsEngineState* st)
     if (exe) {
         if (lkp(st, st->scope, name, nlen) > 0)
             return mkerr(st, "'%.*s' already declared", (int)nlen, name);
-        JsValue x = setprop(st, st->scope, mkstr(st, name, nlen), fn);
+        JsValue x = setprop(st, st->scope, js_intern(st, name, nlen), fn);
         if (is_err(x)) return x;
     }
     return fn;
@@ -1804,7 +1910,7 @@ static JsValue js_bind(JsEngineState* st, bool is_const)
             if (lkp(st, st->scope, name, nlen) > 0)
                 return mkerr(st, "'%.*s' already declared", (int)nlen, name);
             JsOffset pflags = is_const ? kPropConst : 0;
-            JsValue x = setprop(st, st->scope, mkstr(st, name, nlen), resolveprop(st, v), pflags);
+            JsValue x = setprop(st, st->scope, js_intern(st, name, nlen), resolveprop(st, v), pflags);
             if (is_err(x)) return x;
         }
         if (next(st) == TOK_SEMICOLON || next(st) == TOK_EOF) break;  // Stop
@@ -1911,15 +2017,13 @@ static JsValue js_for(JsEngineState* st)
     v = js_block_or_stmt(st);
     if (is_err2(&v, &res)) goto done;
     pos4 = st->position;  // end of body
+    if (for_lex != kForLexNone && exe) {
+        // First per-iteration environment, initialized from the `let` bindings.
+        JsValue firstScope = mkobj(st, (JsOffset)vdata(upper(st, loopScope)));
+        scope_copy_props(st, loopScope, firstScope);
+        st->scope = firstScope;
+    }
     while (!(flags & kFlagNoExec)) {
-        if (for_lex != kForLexNone && exe) {
-            // Derive the parent from loopScope each iteration: a GC may have
-            // relocated it since the loop was entered.
-            JsOffset loopScopeParent = (JsOffset)vdata(upper(st, loopScope));
-            JsValue iterScope = mkobj(st, loopScopeParent);
-            scope_copy_props(st, loopScope, iterScope);
-            st->scope = iterScope;
-        }
         st->flags = flags, st->position = pos1, st->consumed = 1;
         if (next(st) != TOK_SEMICOLON) {       // Is condition specified?
             v = resolveprop(st, js_expr(st));  // Yes. check condition
@@ -1942,14 +2046,22 @@ static JsValue js_for(JsEngineState* st)
             if (for_lex != kForLexNone && exe) st->scope = loopScope;
             break;
         }
-        if (for_lex != kForLexNone && exe) st->scope = loopScope;
+        // Prepare the next iteration environment by copying the current
+        // bindings, then run the final expression there. This keeps body-side
+        // updates (e.g. an increment inside the body) while closures made in
+        // the body still see the values they captured.
+        if (for_lex != kForLexNone && exe) {
+            JsValue nextScope = mkobj(st, (JsOffset)vdata(upper(st, st->scope)));
+            scope_copy_props(st, st->scope, nextScope);
+            st->scope = nextScope;
+        }
         st->flags = flags, st->position = pos2,
         st->consumed = 1;                      // Jump to final expr
         if (next(st) != TOK_RPAREN) {          // Is it specified?
             v = js_expr(st);                   // Yes. Execute it
             if (is_err2(&v, &res)) goto loop_scope_done;
         }
-        if (for_lex != kForLexNone && exe) st->scope = loopScope;
+        // Keep st->scope on the freshly prepared next-iteration environment.
     }
     if (!(st->flags & kFlagReturn)) {
         st->position = pos4;
@@ -2175,7 +2287,7 @@ static JsValue js_try(JsEngineState* st)
         EXPECT(TOK_LBRACE, );
         mkscope(st);
         const char* msg = st->errMsg + 7;
-        setprop(st, st->scope, mkstr(st, ename, elen), mkstr(st, msg, strlen(msg)));
+        setprop(st, st->scope, js_intern(st, ename, elen), mkstr(st, msg, strlen(msg)));
         st->consumed = 1;
         res = js_block(st, false);
         if (next(st) == TOK_RBRACE) st->consumed = 1;
@@ -2298,7 +2410,7 @@ static JsValue js_stmt(JsEngineState* st)
     // of top-level code. While parsing (kFlagNoExec) or inside a JS function
     // body / native call, intermediate values live only in locals and on the
     // argument stack, so collecting there is unsafe.
-    if (st->break_ > st->gcThreshold &&
+    if (st->break_ > st->gcThreshold && st->rootOverflow == 0 &&
         !(st->flags & (kFlagNative | kFlagCall | kFlagNoExec)))
         runGc(st);
     switch (next(st)) {  // clang-format off
@@ -2434,7 +2546,8 @@ JsValue internal::setprop(JsEngineState* st, JsValue obj, JsValue k, JsValue v, 
     memcpy(&b, &st->memory[head], sizeof(b));   // Load current 1st prop offset
     memcpy(buf, &koff, sizeof(koff));           // Initialize prop data: copy key
     memcpy(buf + sizeof(koff), &v, sizeof(v));  // Copy value
-    JsOffset brk = st->break_ | T_OBJ;          // New prop offset
+    // Keep header flags (e.g. the array marker) when repointing the chain.
+    JsOffset brk = st->break_ | (b & kObjArrayFlag) | T_OBJ;  // New prop offset
     // printf("PROP: %u -> %u\n", b, brk);
     JsValue res = mkentity(st, (b & kPropLinkMask) | T_PROP | pflags, buf, sizeof(buf));
     if (!is_err(res)) memcpy(&st->memory[head], &brk,
@@ -2446,10 +2559,14 @@ void internal::runGc(JsEngineState* st)
 {
     // printf("================== GC %u\n", st->noGc);
     setlwm(st);
+    // Weak caches: cached entities may be moved or collected by this GC.
+    js_code_cache_clear(st);
+    memset(st->intern, 0, sizeof(st->intern));
     if (st->noGc == (JsOffset)~0) return;  // ~0 is a special case: GC Is disabled
     js_mark_all_entities_for_deletion(st);
     js_unmark_used_entities(st);
     js_delete_marked_entities(st);
+    js_rebuild_array_list(st);
 }
 
 bool internal::streq(const char* buf, size_t len, const char* p, size_t n)

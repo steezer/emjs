@@ -226,6 +226,7 @@ struct Parser {
         if (is_err(arr)) return arr;
         JsValue lr = set_key(st, arr, "length", tov(0));
         if (is_err(lr)) return lr;
+        array_register(st, arr);
         skip_ws();
         if (peek() == ']') {
             get();

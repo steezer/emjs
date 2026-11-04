@@ -3,3 +3,4 @@ build-targets/
 build.*/
 .cache
 /Makefile
+_asan.dSYM
