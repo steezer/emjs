@@ -79,7 +79,6 @@ int runTest(void* buffer, std::size_t length, const char* code)
     evalOk(code);
     
     std::string strValue="99";
-    std::stod(strValue);
     auto params={
             JsEngine::makeNumber(std::stod(strValue)), 
             JsEngine::makeNumber(12)

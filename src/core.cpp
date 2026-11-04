@@ -547,15 +547,29 @@ static void js_fixup_offsets(JsEngineState* st, JsOffset start, JsOffset size)
 
 static void js_delete_marked_entities(JsEngineState* st)
 {
-    for (JsOffset n, v, off = 0; off < st->break_; off += n) {
-        v = loadoff(st, off);
-        n = esize(v & ~GCMASK);
-        if (v & GCMASK) {
-            js_fixup_offsets(st, off, n);
-            memmove(&st->memory[off], &st->memory[off + n], st->break_ - off - n);
-            st->break_ -= n;
-            n = 0;
+    // Coalesce adjacent dead entities into a single run. Fixing up and moving
+    // once per run instead of once per entity turns a typical GC (one large
+    // contiguous batch of per-call garbage) into a single heap pass.
+    JsOffset off = 0;
+    while (off < st->break_) {
+        JsOffset v = loadoff(st, off);
+        JsOffset n = esize(v & ~GCMASK);
+        if (!(v & GCMASK)) {
+            off += n;
+            continue;
         }
+        JsOffset start = off, size = 0;
+        while (off < st->break_) {
+            v = loadoff(st, off);
+            if (!(v & GCMASK)) break;
+            n = esize(v & ~GCMASK);
+            size += n;
+            off += n;
+        }
+        js_fixup_offsets(st, start, size);
+        memmove(&st->memory[start], &st->memory[start + size], st->break_ - start - size);
+        st->break_ -= size;
+        off = start;  // The tail was moved down; rescan from here.
     }
 }
 
