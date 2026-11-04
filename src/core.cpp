@@ -897,19 +897,24 @@ static JsValue lookup(JsEngineState* st, const char* buf, size_t len)
 
 static JsValue assign(JsEngineState* st, JsValue lhs, JsValue val)
 {
-    if (vtype(lhs) == T_PROP && (loadoff(st, (JsOffset)vdata(lhs)) & kPropConst) != 0)
+    JsOffset prop = (JsOffset)vdata(lhs);
+    if (vtype(lhs) == T_PROP && (loadoff(st, prop) & kPropConst) != 0)
         return mkerr(st, "assignment to constant");
-  saveval(st, (JsOffset)((vdata(lhs) & ~3U) + sizeof(JsOffset) * 2), val);
+    saveval(st, (JsOffset)(prop + sizeof(JsOffset) * 2), val);
     if (vtype(lhs) == T_PROP) {
-        JsOffset prop = (JsOffset)vdata(lhs);
-        JsValue arr = internal::array_owner_of_prop(st, prop);
-        if (vtype(arr) == T_OBJ) {
-            JsOffset koff = loadoff(st, (JsOffset)(prop + sizeof(JsOffset)));
-            JsOffset klen = (loadoff(st, koff) >> 2) - 1;
-            const char* kp = (char*)&st->memory[koff + sizeof(koff)];
+        // Only numeric keys can extend an array's length. Check that cheaply
+        // first: array_owner_of_prop() scans every object in the heap, so
+        // calling it for ordinary variable assignment is prohibitively slow.
+        JsOffset koff = loadoff(st, (JsOffset)(prop + sizeof(JsOffset)));
+        JsOffset klen = (loadoff(st, koff) >> 2) - 1;
+        const char* kp = (char*)&st->memory[koff + sizeof(koff)];
+        if (klen > 0 && is_digit((unsigned char)kp[0])) {
             char* end = NULL;
             double idx = strtod(kp, &end);
-            if (end == kp + (ptrdiff_t)klen) internal::array_update_length_for_index(st, arr, idx);
+            if (end == kp + (ptrdiff_t)klen) {
+                JsValue arr = internal::array_owner_of_prop(st, prop);
+                if (vtype(arr) == T_OBJ) internal::array_update_length_for_index(st, arr, idx);
+            }
         }
     }
     return lhs;

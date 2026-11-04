@@ -203,8 +203,8 @@ let md5 = function (str) {
 };
 
 console.time('md5');
-for (let index = 0; index < 10; index++) {
-    md5("hello"+index);
+for (let index = 1; index < 101; index++) {
+    console.log(md5("hello"+index));
 }
 console.timeEnd('md5');
 // 5d41402abc4b2a76b9719d911017c592
