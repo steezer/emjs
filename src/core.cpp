@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -33,6 +34,29 @@ static constexpr std::uint8_t kFlagNative = 128U;
 
 static constexpr JsOffset kPropConst = 0x40000000U;  // const binding marker (high bit)
 static constexpr JsOffset kPropLinkMask = 0x3FFFFFFCU;  // strip type + const flag
+
+// Registers pointers to C++ locals holding JS values that must survive nested
+// statement execution. The GC relocates through these pointers, so reading the
+// locals after a nested statement observes the updated offsets.
+class RootScope
+{
+public:
+    RootScope(JsEngineState* st, std::initializer_list<JsValue*> values)
+        : st_(st), saved_(st->rootCount)
+    {
+        for (JsValue* value : values) {
+            if (st_->rootCount < kJsMaxRoots) st_->roots[st_->rootCount++] = value;
+        }
+    }
+    ~RootScope() { st_->rootCount = saved_; }
+
+    RootScope(const RootScope&) = delete;
+    RootScope& operator=(const RootScope&) = delete;
+
+private:
+    JsEngineState* st_;
+    std::uint8_t saved_;
+};
 
 // A JS memory stores diffenent entities: objects, properties, strings
 // All entities are packed to the beginning of a buffer.
@@ -266,21 +290,26 @@ static JsValue upper(JsEngineState* st, JsValue scope)
     return mkval(T_OBJ, loadoff(st, (JsOffset)(vdata(scope) + sizeof(JsOffset))));
 }
 
+// A function value packs two 24-bit offsets into its 48-bit payload:
+// bits 0..23 - offset of the function's code string, bits 24..47 - scope
+// offset. 24 bits allow up to 16MB of JS memory for each.
+static constexpr JsValue kFuncOffMask = 0xffffffU;
+
 static inline JsOffset func_code_off(JsValue fn)
 {
-    return (JsOffset)(vdata(fn) & 0xffffffffUL);
+    return (JsOffset)(vdata(fn) & kFuncOffMask);
 }
 
 static inline JsOffset func_scope_off(JsValue fn)
 {
-    return (JsOffset)(vdata(fn) >> 32);
+    return (JsOffset)((vdata(fn) >> 24U) & kFuncOffMask);
 }
 
 static inline JsValue mkfunc(JsEngineState* st, JsValue str)
 {
     JsOffset soff = (JsOffset)vdata(str);
     JsOffset scoff = (JsOffset)vdata(st->scope);
-    return mkval(T_FUNC, ((JsValue)scoff << 32) | soff);
+    return mkval(T_FUNC, ((JsValue)(scoff & kFuncOffMask) << 24U) | (soff & kFuncOffMask));
 }
 
 static JsOffset func_vstr(JsEngineState* st, JsValue fn, JsOffset* len)
@@ -295,7 +324,8 @@ static void js_fixup_func(JsEngineState* st, JsValue* vp, JsOffset start, JsOffs
     JsOffset scope = func_scope_off(*vp);
     if (code > start) code -= size;
     if (scope > start) scope -= size;
-    *vp = mkval(T_FUNC, ((JsValue)scope << 32) | code);
+    *vp = mkval(T_FUNC,
+                ((JsValue)(scope & kFuncOffMask) << 24U) | (code & kFuncOffMask));
 }
 
 // clang-format off
@@ -506,8 +536,8 @@ static void js_fixup_offsets(JsEngineState* st, JsOffset start, JsOffset size)
     JsOffset off = (JsOffset)vdata(st->scope);
     if (off > start) st->scope = mkval(T_OBJ, off - size);
     if (st->noGc >= start) st->noGc -= size;
-    js_fixup_value(st, (JsValue*)st->cStackPtr, start, size);
     js_fixup_value(st, &st->callThis, start, size);
+    for (JsOffset i = 0; i < st->rootCount; i++) js_fixup_value(st, st->roots[i], start, size);
     if (st->code > (char*)st->memory && st->code - (char*)st->memory < st->memSize &&
         st->code - (char*)st->memory > start) {
         st->code -= size;
@@ -563,6 +593,17 @@ static JsOffset js_unmark_entity(JsEngineState* st, JsOffset off)
     return v & ~(GCMASK | 3U);
 }
 
+static void js_unmark_value(JsEngineState* st, JsValue v)
+{
+    if (vtype(v) == T_FUNC) {
+        js_unmark_entity(st, func_code_off(v));
+        JsOffset scope = func_scope_off(v);
+        if (scope != 0) js_unmark_entity(st, scope);
+    } else if (is_mem_entity(vtype(v))) {
+        js_unmark_entity(st, (JsOffset)vdata(v));
+    }
+}
+
 static void js_unmark_used_entities(JsEngineState* st)
 {
     js_unmark_entity(st, 0);
@@ -571,6 +612,8 @@ static void js_unmark_used_entities(JsEngineState* st)
         scope = upper(st, scope);
     }
     if (st->noGc != 0 && st->noGc != (JsOffset)~0) js_unmark_entity(st, st->noGc);
+    js_unmark_value(st, st->callThis);
+    for (JsOffset i = 0; i < st->rootCount; i++) js_unmark_value(st, *st->roots[i]);
 }
 
 
@@ -787,6 +830,7 @@ static void scope_copy_props(JsEngineState* st, JsValue src, JsValue dst)
 static JsValue js_block(JsEngineState* st, bool create_scope)
 {
     JsValue res = mkundef();
+    RootScope roots(st, {&res});
     if (create_scope) mkscope(st);  // Enter new scope
     st->consumed = 1;
     // JsOffset pos = st->position;
@@ -1425,7 +1469,9 @@ static JsValue js_func_body(JsEngineState* st)
     EXPECT(TOK_LBRACE, st->flags = flags);
     st->consumed = 0;
     st->flags |= kFlagNoExec;
-    JsValue res = js_block(st, false);
+    JsValue res = mkundef();
+    RootScope roots(st, {&res});
+    res = js_block(st, false);
     if (is_err(res)) {
         st->flags = flags;
         return res;
@@ -1760,12 +1806,13 @@ static JsValue js_if(JsEngineState* st)
 {
     st->consumed = 1;
     EXPECT(TOK_LPAREN, );
-    JsValue res = mkundef(), cond = resolveprop(st, js_expr(st));
+    JsValue res = mkundef(), cond = resolveprop(st, js_expr(st)), blk = mkundef();
+    RootScope roots(st, {&res, &cond, &blk});
     EXPECT(TOK_RPAREN, );
     bool cond_true = truthy(st, cond), exe = !(st->flags & kFlagNoExec);
     // printf("IF COND: %s, true? %d\n", strValue(st, cond), cond_true);
     if (!cond_true) st->flags |= kFlagNoExec;
-    JsValue blk = js_block_or_stmt(st);
+    blk = js_block_or_stmt(st);
     if (cond_true) res = blk;
     if (exe && !cond_true) st->flags &= (uint8_t)~kFlagNoExec;
     if (lookahead(st) == TOK_ELSE) {
@@ -1803,10 +1850,10 @@ static JsValue js_for(JsEngineState* st)
     enum : uint8_t { kForLexNone = 0, kForLexLet = 1, kForLexConst = 2 };
     uint8_t flags = st->flags, exe = !(flags & kFlagNoExec);
     uint8_t for_lex = kForLexNone;
-    JsValue v, res = mkundef();
+    JsValue v = mkundef(), res = mkundef();
     JsOffset pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
     JsValue loopScope = mkundef();
-    JsOffset loopScopeParent = 0;
+    RootScope roots(st, {&v, &res, &loopScope});
     if (exe) mkscope(st);  // Enter new scope
     if (!expect(st, TOK_FOR, &res)) goto done;
     if (!expect(st, TOK_LPAREN, &res)) goto done;
@@ -1826,7 +1873,6 @@ static JsValue js_for(JsEngineState* st)
     }
     if (for_lex != kForLexNone && exe) {
         loopScope = st->scope;
-        loopScopeParent = (JsOffset)vdata(upper(st, loopScope));
     }
     if (!expect(st, TOK_SEMICOLON, &res)) goto done;
     st->flags |= kFlagNoExec;
@@ -1848,6 +1894,9 @@ static JsValue js_for(JsEngineState* st)
     pos4 = st->position;  // end of body
     while (!(flags & kFlagNoExec)) {
         if (for_lex != kForLexNone && exe) {
+            // Derive the parent from loopScope each iteration: a GC may have
+            // relocated it since the loop was entered.
+            JsOffset loopScopeParent = (JsOffset)vdata(upper(st, loopScope));
             JsValue iterScope = mkobj(st, loopScopeParent);
             scope_copy_props(st, loopScope, iterScope);
             st->scope = iterScope;
@@ -1950,6 +1999,7 @@ static JsValue js_switch(JsEngineState* st)
 {
     uint8_t flags = st->flags, exe = !(flags & kFlagNoExec);
     JsValue res = mkundef();
+    RootScope roots(st, {&res});
     st->consumed = 1;
     EXPECT(TOK_LPAREN, );
     JsValue disc = js_expr(st);
@@ -1982,7 +2032,8 @@ static JsValue js_switch(JsEngineState* st)
 static JsValue js_while(JsEngineState* st)
 {
     uint8_t flags = st->flags, exe = !(flags & kFlagNoExec);
-    JsValue res = mkundef(), v;
+    JsValue res = mkundef(), v = mkundef();
+    RootScope roots(st, {&res, &v});
     st->consumed = 1;
     EXPECT(TOK_LPAREN, );
     JsOffset posCond = st->position;
@@ -2028,7 +2079,8 @@ static JsValue js_while(JsEngineState* st)
 static JsValue js_do(JsEngineState* st)
 {
     uint8_t flags = st->flags, exe = !(flags & kFlagNoExec);
-    JsValue res = mkundef(), v;
+    JsValue res = mkundef(), v = mkundef();
+    RootScope roots(st, {&res, &v});
     st->consumed = 1;
     next(st);
     JsOffset posBody = st->tokenOffset;
@@ -2081,6 +2133,7 @@ static JsValue js_try(JsEngineState* st)
 {
     uint8_t flags = st->flags;
     JsValue res = mkundef(), fin = mkundef();
+    RootScope roots(st, {&res, &fin});
     st->consumed = 1;
     EXPECT(TOK_LBRACE, );
     st->flags = flags | kFlagInTry;
@@ -2222,7 +2275,13 @@ static JsValue js_stmt(JsEngineState* st)
 {
     JsValue res;
     // JsOffset pos = st->position - st->tokenLen;
-    if (st->break_ > st->gcThreshold && !(st->flags & kFlagNative)) runGc(st);
+    // Run GC only at a safe point: a statement boundary during real execution
+    // of top-level code. While parsing (kFlagNoExec) or inside a JS function
+    // body / native call, intermediate values live only in locals and on the
+    // argument stack, so collecting there is unsafe.
+    if (st->break_ > st->gcThreshold &&
+        !(st->flags & (kFlagNative | kFlagCall | kFlagNoExec)))
+        runGc(st);
     switch (next(st)) {  // clang-format off
     case TOK_CASE: case TOK_CATCH: case TOK_CLASS:
     case TOK_DEFAULT: case TOK_DELETE: case TOK_FINALLY:
@@ -2463,6 +2522,7 @@ JsValue internal::js_eval(JsEngine* st, const char* buf, size_t len)
 {
     // printf("EVAL: [%.*s]\n", (int) len, buf);
     JsValue res = mkundef();
+    RootScope roots(st, {&res});
     if (len == (size_t)-1 || len == (size_t)~0U) len = strlen(buf);
     st->consumed = 1;
     st->token = TOK_ERR;

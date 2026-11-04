@@ -44,6 +44,7 @@ static JsEngine* createState(void* buffer, size_t length, bool ownsBuffer)
     st->memSize = st->memSize / 8U * 8U;
     st->lowWatermark = st->memSize;
     st->gcThreshold = (JsOffset)(static_cast<double>(st->memSize) * JS_GC_THRESHOLD);
+    st->rootCount = 0;
     st->ownsBuffer = ownsBuffer;
     st->bufferSize = length;
     return st;
@@ -132,6 +133,7 @@ JsEngine::~JsEngine()
     flags = 0;
     maxCss = 0;
     cStackPtr = nullptr;
+    rootCount = 0;
 }
 
 void JsEngine::destroy(JsEngine* engine)

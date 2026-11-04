@@ -12,6 +12,11 @@ using JsOffset = std::uint32_t;
 
 enum class JsValueType : int { Undefined = 0, Null, True, False, String, Number, Error, Private };
 
+// Root slots keep JS values that live in C++ locals across nested statement
+// execution visible to the moving GC. Pointers to those locals are registered
+// so the collector can both trace and relocate them.
+inline constexpr int kJsMaxRoots = 64;
+
 struct JsEngineState {
     JsOffset cStackSize;
     JsOffset lowWatermark;
@@ -34,6 +39,8 @@ struct JsEngineState {
     JsOffset gcThreshold;
     JsOffset maxCss;
     void* cStackPtr;
+    JsValue* roots[kJsMaxRoots];
+    std::uint8_t rootCount;
     bool ownsBuffer;
     std::size_t bufferSize;
 };
