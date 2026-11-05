@@ -1,0 +1,13 @@
+let f = (a, b) => a + b;
+console.log(f(2, 3));
+let g = x => x * 2;
+console.log(g(4));
+let h = () => 42;
+console.log(h());
+let k = x => { let y = x + 1; return y * 3; };
+console.log(k(5));
+let o = { m: x => x - 1 };
+console.log(o.m(10));
+console.log((a => a * a)(6));
+let outer = x => y => x + y;
+console.log(outer(2)(3));

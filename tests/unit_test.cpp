@@ -698,6 +698,25 @@ static void test_ternary(void) {
   assert(ev(js, "f(10)", "3628800"));
 }
 
+static void test_arrows(void) {
+  JsEngine *js;
+  char mem[sizeof(*js) + 6000];
+  assert((js = js_create(mem, sizeof(mem))) != NULL);
+
+  assert(ev(js, "let af = (a, b) => a + b; af(2, 3)", "5"));
+  assert(ev(js, "let ag = x => x * 2; ag(4)", "8"));
+  assert(ev(js, "let ah = () => 42; ah()", "42"));
+  assert(ev(js, "let ak = x => { let y = x + 1; return y * 3; }; ak(5)", "18"));
+  assert(ev(js, "let ao = { m: x => x - 1 }; ao.m(10)", "9"));
+  assert(ev(js, "let ac = n => x => x + n; ac(5)(3)", "8"));
+  assert(ev(js, "let aa = [x => x * 2, 3]; aa[0](aa[1])", "6"));
+  assert(ev(js, "let ap = x => ({ v: x }); ap(7).v", "7"));
+  assert(ev(js, "let as = x => 'a,b' + x; as(1)", "\"a,b1\""));
+  assert(ev(js, "let at = x => x + 1 // trailing\nat(1)", "2"));
+  assert(ev(js, "let am = x => x\n    + 1\nam(2)", "3"));
+  assert(ev(js, "let an = 1\nan", "1"));
+}
+
 static void test_new_features(void) {
   JsEngine *js;
   char mem[sizeof(*js) + 4500];
@@ -755,6 +774,7 @@ int main(void) {
   test_funcs();
   test_c_funcs();
   test_ternary();
+  test_arrows();
   test_gc();
   test_gc_tree_stress();
   test_new_features();

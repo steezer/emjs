@@ -2775,17 +2775,89 @@ static JsOffset find_block_end(JsEngineState* st, JsOffset start)
     return 0;
 }
 
+// Can the next significant character continue an expression across a line
+// break? Mirrors JavaScript's automatic semicolon insertion enough for the
+// common "x => expr<newline>statement" style.
+static bool concise_expr_continues(JsEngineState* st, JsOffset i, JsOffset end)
+{
+    while (i < end) {
+        char c = st->code[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v') {
+            i++;
+        } else if (c == '/' && i + 1 < end && st->code[i + 1] == '/') {
+            for (i += 2; i < end && st->code[i] != '\n'; i++) {}
+        } else if (c == '/' && i + 1 < end && st->code[i + 1] == '*') {
+            for (i += 2; i + 1 < end && !(st->code[i] == '*' && st->code[i + 1] == '/'); i++) {}
+            i += 2;
+        } else {
+            return strchr(".+-*/%&|^<>=?:([", c) != NULL;
+        }
+    }
+    return false;
+}
+
+// Is the expression complete at this point? True when the previous
+// significant character can end an operand.
+static bool concise_expr_complete(JsEngineState* st, JsOffset start, JsOffset i)
+{
+    while (i > start) {
+        char c = st->code[i - 1];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v') {
+            i--;
+        } else {
+            return c == ')' || c == ']' || c == '}' || c == '"' || c == '\'' ||
+                   (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                   (c >= 'A' && c <= 'Z') || c == '_' || c == '$';
+        }
+    }
+    return false;
+}
+
 static JsOffset find_concise_body_end(JsEngineState* st, JsOffset start)
 {
     JsOffset depth = 0;
     for (JsOffset i = start; i < st->codeLen; i++) {
         char c = st->code[i];
+        // Skip string literals and comments so delimiters inside them do not
+        // terminate the expression.
+        if (c == '"' || c == '\'') {
+            char q = c;
+            for (i++; i < st->codeLen && st->code[i] != q; i++) {
+                if (st->code[i] == '\\' && i + 1 < st->codeLen) i++;
+            }
+            continue;
+        }
+        if (c == '/' && i + 1 < st->codeLen) {
+            if (st->code[i + 1] == '/') {
+                for (i += 2; i < st->codeLen && st->code[i] != '\n'; i++) {}
+                if (i >= st->codeLen) continue;
+                // Keep the newline so the ASI check below can end the body.
+                c = st->code[i];
+            } else if (st->code[i + 1] == '*') {
+                for (i += 2; i + 1 < st->codeLen; i++) {
+                    if (st->code[i] == '*' && st->code[i + 1] == '/') {
+                        i++;
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
         if (c == '(' || c == '[' || c == '{') depth++;
         else if (c == ')' || c == ']' || c == '}') {
+            // An unmatched closer ends the expression: it belongs to the
+            // enclosing call/array/object/block, not to the arrow body.
             if (depth > 0) depth--;
-            else if (c == ')') return i;
+            else return i;
         } else if (depth == 0 && (c == ',' || c == ';')) {
             return i;
+        } else if (depth == 0 && c == '\n') {
+            // End the body at a line break when the expression is complete and
+            // the next line cannot extend it (ASI). Include the newline so a
+            // trailing // comment cannot swallow the generated suffix.
+            if (concise_expr_complete(st, start, i) &&
+                !concise_expr_continues(st, i + 1, st->codeLen))
+                return i + 1;
         }
     }
     return st->codeLen;
@@ -2808,7 +2880,7 @@ static JsValue js_arrow_build(JsEngineState* st, const void* params, size_t plen
     } else {
         JsOffset body_end = find_concise_body_end(st, body_start);
         static const char prefix[] = " { return ";
-        static const char suffix[] = "; }";
+        static const char suffix[] = "\n; }";
         size_t elen = (size_t)(body_end - body_start);
         size_t n = plen + sizeof(prefix) - 1 + elen + sizeof(suffix) - 1;
         char stack[512];
@@ -3226,7 +3298,11 @@ static JsValue js_bind(JsEngineState* st, bool is_const)
                 if (is_err(x)) return x;
             }
         }
-        if (next(st) == TOK_SEMICOLON || next(st) == TOK_EOF) break;  // Stop
+        uint8_t t = next(st);
+        if (t == TOK_SEMICOLON || t == TOK_EOF) break;  // Stop
+        // Automatic semicolon insertion: `let f = x => x + 1` followed by the
+        // next statement on a new line.
+        if (t != TOK_COMMA && linebreak_before_token(st)) break;
         EXPECT(TOK_COMMA, );
     }
     return mkundef();

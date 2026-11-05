@@ -285,6 +285,10 @@ undefined; null; true; false;
   - `x => x * 2`
   - `(a,b) => a + b`
   - `(x) => { return x * 2; }`
+  - concise expression bodies, including `x => ({ a: x })` and multi-line
+    expressions; the body ends at `,`/`;`, an enclosing closing bracket, or a
+    newline that starts the next statement (automatic semicolon insertion)
+  - default/rest parameters and lexical `this` are not supported
 
 ### Statement termination
 
