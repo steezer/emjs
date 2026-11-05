@@ -56,11 +56,22 @@ inline constexpr int kJsDecisionCacheSlots = JS_DECISION_CACHE_SLOTS;
 #define JS_PARAM_SLOTS 1
 #endif
 
+// Per-function slot metadata cache, keyed by code-string entity offset.
+#ifndef JS_META_CACHE_SLOTS
+#define JS_META_CACHE_SLOTS 32
+#endif
+inline constexpr int kJsMetaCacheSlots = JS_META_CACHE_SLOTS;
+
 struct JsDecisionCacheEntry {
     const char* code;
     JsOffset pos;
     std::uint8_t kind;
     std::uint8_t value;
+};
+
+struct JsMetaCacheEntry {
+    JsOffset code;
+    JsOffset meta;
 };
 
 struct JsEngineState {
@@ -95,6 +106,7 @@ struct JsEngineState {
     JsOffset codeCachePos[kJsCodeCacheSlots];
     JsOffset codeCacheEnd[kJsCodeCacheSlots];
     JsDecisionCacheEntry decisions[kJsDecisionCacheSlots];
+    JsMetaCacheEntry metaCache[kJsMetaCacheSlots];
     bool ownsBuffer;
     std::size_t bufferSize;
 };

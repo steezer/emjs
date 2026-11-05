@@ -566,7 +566,10 @@ static JsValue js_intern(JsEngineState* st, const void* ptr, size_t len)
 // at the outermost eval (the caller's source buffer may be gone or reused).
 static JsOffset js_code_cache_index(const char* code, JsOffset pos)
 {
-    return (JsOffset)((((uintptr_t)code >> 3) ^ pos) & (kJsCodeCacheSlots - 1));
+    uintptr_t h = ((uintptr_t)code >> 3) * 2654435761U;
+    h ^= (uintptr_t)pos * 2246822519U;
+    h ^= h >> 16U;
+    return (JsOffset)(h & (kJsCodeCacheSlots - 1));
 }
 
 static JsValue js_code_cache_get(JsEngineState* st, const char* code, JsOffset pos, JsOffset* end)
@@ -595,10 +598,39 @@ static void js_code_cache_clear(JsEngineState* st)
     memset(st->codeCacheStr, 0, sizeof(st->codeCacheStr));
 }
 
+static inline JsOffset js_meta_cache_index(JsOffset code)
+{
+    uintptr_t h = (uintptr_t)code * 2654435761U;
+    h ^= h >> 15U;
+    return (JsOffset)(h & (kJsMetaCacheSlots - 1));
+}
+
+static JsValue js_meta_cache_get(JsEngineState* st, JsOffset code)
+{
+    JsMetaCacheEntry& e = st->metaCache[js_meta_cache_index(code)];
+    if (e.code == code && e.meta != 0 && e.meta < st->break_ &&
+        (loadoff(st, e.meta) & 3U) == T_STR)
+        return mkval(T_STR, e.meta);
+    return 0;
+}
+
+static void js_meta_cache_put(JsEngineState* st, JsOffset code, JsOffset meta)
+{
+    JsMetaCacheEntry& e = st->metaCache[js_meta_cache_index(code)];
+    e.code = code;
+    e.meta = meta;
+}
+
+static void js_meta_cache_clear(JsEngineState* st)
+{
+    memset(st->metaCache, 0, sizeof(st->metaCache));
+}
+
 void internal::code_cache_clear(JsEngineState* st)
 {
     js_code_cache_clear(st);
     js_decision_cache_clear(st);
+    js_meta_cache_clear(st);
 }
 
 static JsOffset func_vstr(JsEngineState* st, JsValue fn, JsOffset* len)
@@ -789,9 +821,11 @@ static JsValue mkframe(JsEngineState* st, JsOffset count, JsValue parent, JsOffs
     memcpy(&st->memory[off + 4], &meta, sizeof(meta));
     memcpy(&st->memory[off + 8], &code, sizeof(code));
     memcpy(&st->memory[off + 12], &parentWord, sizeof(parentWord));
-    JsValue undef = mkundef();
+    // Slots start uninitialized; parameters are filled in by the caller and
+    // body-level declarations are initialized when their statement executes.
+    JsValue uninit = mkval(T_UNINIT, 0);
     for (JsOffset i = 0; i < count; i++) {
-        memcpy(&st->memory[off + kFrameHdrSize + i * sizeof(JsValue)], &undef, sizeof(undef));
+        memcpy(&st->memory[off + kFrameHdrSize + i * sizeof(JsValue)], &uninit, sizeof(uninit));
     }
     return mkval(T_FRAME, off);
 }
@@ -1255,33 +1289,62 @@ static int frame_find(JsEngineState* st, JsOffset frame, const char* buf, size_t
     JsOffset data = (JsOffset)(meta + sizeof(JsOffset));
     JsOffset count = loadoff(st, data);
     const char* base = (const char*)&st->memory[frame_code(st, frame) + sizeof(JsOffset)];
-    // Scan backwards: duplicate parameter names resolve to the last one, which
-    // matches the old prepend-to-property-list behaviour.
+    // Scan backwards: duplicate names resolve to the last one (matching the old
+    // prepend-to-property-list behaviour). Slots not initialized yet do not
+    // shadow outer scopes.
     for (JsOffset i = count; i-- > 0;) {
-        JsOffset off = loadoff(st, (JsOffset)(data + 8 + i * 8));
-        JsOffset l = loadoff(st, (JsOffset)(data + 8 + i * 8 + 4));
-        if ((size_t)l == len && (len == 0 || memcmp(base + off, buf, len) == 0)) return (int)i;
+        JsOffset e = (JsOffset)(data + 12 + i * 8);
+        JsOffset off = loadoff(st, e);
+        JsOffset l = loadoff(st, (JsOffset)(e + 4)) & 0xFFFFU;
+        if ((size_t)l != len || (len != 0 && memcmp(base + off, buf, len) != 0)) continue;
+        if (vtype(frame_get(st, frame, i)) == T_UNINIT) continue;
+        return (int)i;
     }
     return -1;
 }
 
-// A function body that declares anything gets a property scope above the
-// parameter frame; the frame itself only holds parameter slots.
-static JsValue js_ensure_body_scope(JsEngineState* st)
+// Bind a body-level declaration name into a frame slot.
+// Returns an error on redeclaration, sets *found = false if the name has no
+// slot (conservative scanner miss: caller falls back to a property scope).
+static JsValue js_frame_bind(JsEngineState* st, JsValue frame, const char* name, JsOffset nlen,
+                             JsValue value, bool* found)
 {
-    if (vtype(st->scope) != T_FRAME) return st->scope;
-    JsValue s = mkobj(st, scope_word(st->scope));
-    if (is_err(s)) return s;
-    st->scope = s;
-    return s;
+    *found = false;
+    JsOffset fo = (JsOffset)vdata(frame);
+    JsOffset meta = frame_meta(st, fo);
+    if (meta == 0 || meta >= st->break_) return mkundef();
+    JsOffset data = (JsOffset)(meta + sizeof(JsOffset));
+    JsOffset count = loadoff(st, data);
+    const char* base = (const char*)&st->memory[frame_code(st, fo) + sizeof(JsOffset)];
+    int chosen = -1;
+    bool duplicate = false;
+    for (JsOffset i = 0; i < count; i++) {
+        JsOffset e = (JsOffset)(data + 12 + i * 8);
+        JsOffset off = loadoff(st, e);
+        JsOffset l = loadoff(st, (JsOffset)(e + 4)) & 0xFFFFU;
+        if ((size_t)l != nlen || (nlen != 0 && memcmp(base + off, name, nlen) != 0)) continue;
+        chosen = (int)i;
+        if (vtype(frame_get(st, fo, i)) != T_UNINIT) duplicate = true;
+    }
+    if (chosen < 0) return mkundef();
+    *found = true;
+    if (duplicate) return mkerr(st, "'%.*s' already declared", (int)nlen, name);
+    frame_set(st, fo, (JsOffset)chosen, value);
+    return mkundef();
 }
 
-// True if the name is a parameter of the frame directly below `st->scope`.
-static bool js_param_redeclared(JsEngineState* st, const char* buf, size_t len)
+// True if the slot was declared with `const` in the frame's metadata.
+static bool js_slot_is_const(JsEngineState* st, JsValue slot)
 {
-    JsValue par = upper(st, st->scope);
-    if (vtype(par) != T_FRAME) return false;
-    return frame_find(st, (JsOffset)vdata(par), buf, len) >= 0;
+    JsOffset fo = slot_frame(slot);
+    JsOffset meta = frame_meta(st, fo);
+    if (meta == 0 || meta >= st->break_) return false;
+    JsOffset data = (JsOffset)(meta + sizeof(JsOffset));
+    JsOffset count = loadoff(st, data);
+    JsOffset idx = slot_index(slot);
+    if (idx >= count) return false;
+    JsOffset e = (JsOffset)(data + 12 + idx * 8);
+    return (st->memory[e + 6] & 1U) != 0;
 }
 
 static JsValue lookup(JsEngineState* st, const char* buf, size_t len)
@@ -1307,6 +1370,7 @@ static JsValue lookup(JsEngineState* st, const char* buf, size_t len)
 static JsValue assign(JsEngineState* st, JsValue lhs, JsValue val)
 {
     if (vtype(lhs) == T_SLOT) {
+        if (js_slot_is_const(st, lhs)) return mkerr(st, "assignment to constant");
         frame_set(st, slot_frame(lhs), slot_index(lhs), val);
         return lhs;
     }
@@ -1530,7 +1594,149 @@ static JsValue call_c(JsEngineState* st, JsEngine::NativeFunction fn)
     return res;
 }
 
-static constexpr int kMaxSlotParams = 64;
+static constexpr int kMaxSlotParams = 64;  // total slots (params + body locals)
+
+struct JsSlotMeta {
+    JsOffset off;  // offset of the name within the function's code string
+    JsOffset len;
+    uint8_t flags;  // bit0: const
+};
+
+// Scan a function body for top-level declarations (let/const/function) and
+// append them to `out`. Only names at brace/paren/bracket depth 0 are body
+// locals; nested blocks get their own scope. Conservative: extra names are
+// harmless because slots stay uninitialized until their statement runs.
+static int js_scan_top_decls(const char* p, JsOffset len, JsOffset base, JsSlotMeta* out,
+                             int maxOut, int n, bool* overflow)
+{
+    JsOffset i = 0;
+    int paren = 0, brack = 0, brace = 0;
+    while (i < len) {
+        char c = p[i];
+        if (c == '"' || c == '\'') {
+            char q = c;
+            for (i++; i < len && p[i] != q; i++) {
+                if (p[i] == '\\' && i + 1 < len) i++;
+            }
+            if (i < len) i++;
+            continue;
+        }
+        if (c == '/' && i + 1 < len) {
+            if (p[i + 1] == '/') {
+                for (i += 2; i < len && p[i] != '\n'; i++) {}
+                continue;
+            }
+            if (p[i + 1] == '*') {
+                for (i += 2; i + 1 < len && !(p[i] == '*' && p[i + 1] == '/'); i++) {}
+                i = i + 1 < len ? i + 2 : len;
+                continue;
+            }
+        }
+        if (c == '(') { paren++; i++; continue; }
+        if (c == ')') { if (paren) paren--; i++; continue; }
+        if (c == '[') { brack++; i++; continue; }
+        if (c == ']') { if (brack) brack--; i++; continue; }
+        if (c == '{') { brace++; i++; continue; }
+        if (c == '}') { if (brace) brace--; i++; continue; }
+        if (paren || brack || brace) { i++; continue; }
+
+        bool isConst = js_word_at(p, len, i, "const", 5);
+        bool isLet = !isConst && js_word_at(p, len, i, "let", 3);
+        bool isFunc = js_word_at(p, len, i, "function", 8);
+
+        if (isLet || isConst) {
+            uint8_t flags = isConst ? 1 : 0;
+            i += isConst ? 5 : 3;
+            bool more = true;
+            while (more && i < len) {
+                i = skiptonext(p, len, i);
+                if (i >= len) break;
+                char id0 = p[i];
+                if (!(is_alpha((unsigned char)id0) || id0 == '_' || id0 == '$')) break;
+                JsOffset start = i;
+                for (i++; i < len && is_ident_continue((unsigned char)p[i]); i++) {}
+                if (n < maxOut) {
+                    out[n].off = base + start;
+                    out[n].len = i - start;
+                    out[n].flags = flags;
+                    n++;
+                } else {
+                    *overflow = true;
+                }
+                // Skip the initializer to the next top-level ',' or ';'.
+                int pd = 0, bd = 0, brd = 0;
+                more = false;
+                while (i < len) {
+                    char d = p[i];
+                    if (d == '"' || d == '\'') {
+                        char q = d;
+                        for (i++; i < len && p[i] != q; i++) {
+                            if (p[i] == '\\' && i + 1 < len) i++;
+                        }
+                        if (i < len) i++;
+                        continue;
+                    }
+                    if (d == '/' && i + 1 < len) {
+                        if (p[i + 1] == '/') {
+                            for (i += 2; i < len && p[i] != '\n'; i++) {}
+                            continue;
+                        }
+                        if (p[i + 1] == '*') {
+                            for (i += 2; i + 1 < len && !(p[i] == '*' && p[i + 1] == '/'); i++) {}
+                            i = i + 1 < len ? i + 2 : len;
+                            continue;
+                        }
+                    }
+                    if (d == '(') { pd++; i++; continue; }
+                    if (d == ')') {
+                        if (pd) pd--;
+                        else { i = len; break; }
+                        i++;
+                        continue;
+                    }
+                    if (d == '[') { bd++; i++; continue; }
+                    if (d == ']') { if (bd) bd--; i++; continue; }
+                    if (d == '{') { brd++; i++; continue; }
+                    if (d == '}') {
+                        if (brd) { brd--; i++; continue; }
+                        i = len;
+                        break;
+                    }
+                    if (pd == 0 && bd == 0 && brd == 0) {
+                        if (d == ',') { i++; more = true; break; }
+                        if (d == ';') { i++; break; }
+                    }
+                    i++;
+                }
+            }
+            continue;
+        }
+        if (isFunc) {
+            JsOffset j = skiptonext(p, len, i + 8);
+            if (j < len && (is_alpha((unsigned char)p[j]) || p[j] == '_' || p[j] == '$')) {
+                JsOffset start = j;
+                for (j++; j < len && is_ident_continue((unsigned char)p[j]); j++) {}
+                JsOffset k = skiptonext(p, len, j);
+                if (k < len && p[k] == '(') {
+                    if (n < maxOut) {
+                        out[n].off = base + start;
+                        out[n].len = j - start;
+                        out[n].flags = 0;
+                        n++;
+                    } else {
+                        *overflow = true;
+                    }
+                }
+                i = j;
+                continue;
+            }
+            i += 8;
+            continue;
+        }
+        i++;
+    }
+    return n;
+}
 
 // Legacy parameter binding into a property scope (used for functions with no
 // parameters or an unusually large parameter list).
@@ -1560,7 +1766,6 @@ static JsOffset bind_params_props(JsEngineState* st, const char* fn, JsOffset fn
 static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, JsOffset fnlen, JsValue* args,
                             int argc)
 {
-    JsOffset fnpos = 1;
     JsValue saved_scope = st->scope;
     JsOffset sraw = func_scope_raw(fnval);
     JsOffset soff = sraw & kFuncScopeMask;
@@ -1568,63 +1773,106 @@ static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, Js
     JsValue parent_scope =
         (soff == 0) ? saved_scope
                     : mkval((sraw & kFuncScopeFrame) ? T_FRAME : T_OBJ, soff);
+    JsOffset codeEnt = func_code_off(fnval);
 
-    // Parse parameter names once. Small parameter lists become fixed slots.
-    JsOffset poff[kMaxSlotParams], plen[kMaxSlotParams];
+    JsOffset fnpos = 1;
+    size_t n = 0;
     int pcount = 0;
+    int total = 0;
     bool overflow = false;
-    while (fnpos < fnlen) {
-        fnpos = skiptonext(fn, fnlen, fnpos);
-        if (fnpos < fnlen && fn[fnpos] == ')') break;
-        JsOffset identlen = 0;
-        if (parseident(&fn[fnpos], fnlen - fnpos, &identlen) != TOK_IDENTIFIER) break;
-        if (pcount < kMaxSlotParams) {
-            poff[pcount] = fnpos;
-            plen[pcount] = identlen;
-            pcount++;
-        } else {
-            overflow = true;
-        }
-        fnpos = skiptonext(fn, fnlen, fnpos + identlen);
-        if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
-    }
-    if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
-    fnpos = skiptonext(fn, fnlen, fnpos);
-    if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
-    size_t n = fnlen - fnpos - 1U;
-
     bool use_slots = false;
+    JsValue meta = 0;
+    JsOffset poff[kMaxSlotParams], plen[kMaxSlotParams];
+
 #if JS_PARAM_SLOTS
-    use_slots = pcount > 0 && !overflow;
-#endif
-    if (use_slots) {
-        // Parameter name table + body-declaration flag, built once per function
-        // body and cached: [count][hasDecl][{srcOff,len}...].
-        JsValue meta = js_code_cache_get(st, fn, 0, NULL);
-        int hasDecl = 0;
-        if (meta == 0) {
-            char buf[8 + kMaxSlotParams * 8];
-            JsOffset count = (JsOffset)pcount;
-            hasDecl = js_has_declaration(fn + fnpos, (JsOffset)n);
-            JsOffset decl = (JsOffset)hasDecl;
-            memcpy(buf, &count, sizeof(count));
-            memcpy(buf + 4, &decl, sizeof(decl));
-            for (int i = 0; i < pcount; i++) {
-                JsOffset off = poff[i], len = plen[i];
-                memcpy(buf + 8 + i * 8, &off, sizeof(off));
-                memcpy(buf + 8 + i * 8 + 4, &len, sizeof(len));
-            }
-            meta = mkstr(st, buf, 8 + (size_t)pcount * 8);
-            if (is_err(meta)) {
-                st->scope = saved_scope;
-                return meta;
-            }
-            js_code_cache_put(st, fn, 0, 0, meta);
+    // Fast path: cached metadata carries the parameter count and body offset,
+    // so no parameter re-parsing is needed at all.
+    meta = js_meta_cache_get(st, codeEnt);
+    if (meta != 0) {
+        JsOffset data = (JsOffset)(vdata(meta) + sizeof(JsOffset));
+        JsOffset cnt = loadoff(st, data);
+        JsOffset bodyOff = loadoff(st, (JsOffset)(data + 4));
+        JsOffset pc = loadoff(st, (JsOffset)(data + 8)) & 0xFFFFU;
+        if (cnt <= (JsOffset)kMaxSlotParams && pc <= cnt && bodyOff > 1 && bodyOff < fnlen) {
+            total = (int)cnt;
+            pcount = (int)pc;
+            fnpos = bodyOff;
+            n = fnlen - bodyOff - 1U;
+            use_slots = cnt > 0;
         } else {
-            hasDecl = (int)loadoff(st, (JsOffset)(vdata(meta) + sizeof(JsOffset) + 4));
+            meta = 0;
         }
-        JsValue frame =
-            mkframe(st, (JsOffset)pcount, parent_scope, (JsOffset)vdata(meta), func_code_off(fnval));
+    }
+#endif
+
+    if (!use_slots) {
+        fnpos = 1;
+        while (fnpos < fnlen) {
+            fnpos = skiptonext(fn, fnlen, fnpos);
+            if (fnpos < fnlen && fn[fnpos] == ')') break;
+            JsOffset identlen = 0;
+            if (parseident(&fn[fnpos], fnlen - fnpos, &identlen) != TOK_IDENTIFIER) break;
+            if (pcount < kMaxSlotParams) {
+                poff[pcount] = fnpos;
+                plen[pcount] = identlen;
+                pcount++;
+            } else {
+                overflow = true;
+            }
+            fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+            if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
+        }
+        if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
+        fnpos = skiptonext(fn, fnlen, fnpos);
+        if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
+        n = fnlen - fnpos - 1U;
+
+#if JS_PARAM_SLOTS
+        if (!overflow) {
+            // Build the slot table once per function body: parameters first,
+            // then body-level declarations. Cached by code entity offset.
+            JsSlotMeta slotsMeta[kMaxSlotParams];
+            for (int i = 0; i < pcount; i++) {
+                slotsMeta[i].off = poff[i];
+                slotsMeta[i].len = plen[i];
+                slotsMeta[i].flags = 0;
+            }
+            total = js_scan_top_decls(fn + fnpos, (JsOffset)n, (JsOffset)fnpos, slotsMeta,
+                                      kMaxSlotParams, pcount, &overflow);
+            if (!overflow && total > 0) {
+                // [count][bodyOff][paramCount][pad][{srcOff,len,flags,pad}...]
+                char buf[12 + kMaxSlotParams * 8];
+                JsOffset count = (JsOffset)total;
+                JsOffset bodyOff = (JsOffset)fnpos;
+                uint16_t pc = (uint16_t)pcount;
+                uint16_t pad = 0;
+                memcpy(buf, &count, sizeof(count));
+                memcpy(buf + 4, &bodyOff, sizeof(bodyOff));
+                memcpy(buf + 8, &pc, sizeof(pc));
+                memcpy(buf + 10, &pad, sizeof(pad));
+                for (int i = 0; i < total; i++) {
+                    JsOffset off = slotsMeta[i].off;
+                    uint16_t len = (uint16_t)slotsMeta[i].len;
+                    char* e = buf + 12 + i * 8;
+                    memcpy(e, &off, sizeof(off));
+                    memcpy(e + 4, &len, sizeof(len));
+                    e[6] = (char)slotsMeta[i].flags;
+                    e[7] = 0;
+                }
+                meta = mkstr(st, buf, 12 + (size_t)total * 8);
+                if (is_err(meta)) {
+                    st->scope = saved_scope;
+                    return meta;
+                }
+                js_meta_cache_put(st, codeEnt, (JsOffset)vdata(meta));
+            }
+        }
+        use_slots = !overflow && total > 0 && meta != 0;
+#endif
+    }
+
+    if (use_slots) {
+        JsValue frame = mkframe(st, (JsOffset)total, parent_scope, (JsOffset)vdata(meta), codeEnt);
         if (is_err(frame)) {
             st->scope = saved_scope;
             return frame;
@@ -1635,15 +1883,6 @@ static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, Js
             frame_set(st, frameOff, (JsOffset)i, v);
         }
         st->scope = frame;
-        // Give bodies that declare something a property scope above the frame.
-        if (hasDecl) {
-            JsValue body = mkobj(st, scope_word(st->scope));
-            if (is_err(body)) {
-                st->scope = saved_scope;
-                return body;
-            }
-            st->scope = body;
-        }
     } else {
         JsValue scope = mkobj(st, scope_word(parent_scope));
         if (is_err(scope)) {
@@ -1651,15 +1890,7 @@ static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, Js
             return scope;
         }
         st->scope = scope;
-        if (pcount > 0) {  // Re-parse and bind through properties.
-            bind_params_props(st, fn, fnlen, args, argc);
-            fnpos = 1;
-            while (fnpos < fnlen && fn[fnpos] != ')') fnpos++;
-            if (fnpos < fnlen) fnpos++;
-            fnpos = skiptonext(fn, fnlen, fnpos);
-            if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
-            n = fnlen - fnpos - 1U;
-        }
+        if (pcount > 0) bind_params_props(st, fn, fnlen, args, argc);
     }
 
     st->flags = kFlagCall;
@@ -2049,12 +2280,24 @@ static JsValue js_func_decl(JsEngineState* st)
     JsValue fn = js_func_body(st);
     if (is_err(fn)) return fn;
     if (exe) {
-        JsValue scope = js_ensure_body_scope(st);
-        if (is_err(scope)) return scope;
-        if (lkp(st, st->scope, name, nlen) > 0 || js_param_redeclared(st, name, nlen))
-            return mkerr(st, "'%.*s' already declared", (int)nlen, name);
-        JsValue x = setprop(st, st->scope, js_intern(st, name, nlen), fn);
-        if (is_err(x)) return x;
+        bool handled = false;
+        if (vtype(st->scope) == T_FRAME) {
+            bool found = false;
+            JsValue r = js_frame_bind(st, st->scope, name, nlen, fn, &found);
+            if (is_err(r)) return r;
+            handled = found;
+            if (!found) {  // scanner miss: fall back to a property scope
+                JsValue s = mkobj(st, scope_word(st->scope));
+                if (is_err(s)) return s;
+                st->scope = s;
+            }
+        }
+        if (!handled) {
+            if (lkp(st, st->scope, name, nlen) > 0)
+                return mkerr(st, "'%.*s' already declared", (int)nlen, name);
+            JsValue x = setprop(st, st->scope, js_intern(st, name, nlen), fn);
+            if (is_err(x)) return x;
+        }
     }
     return fn;
 }
@@ -2336,13 +2579,27 @@ static JsValue js_bind(JsEngineState* st, bool is_const)
             return mkerr(st, "const needs init");
         }
         if (exe) {
-            JsValue scope = js_ensure_body_scope(st);
-            if (is_err(scope)) return scope;
-            if (lkp(st, st->scope, name, nlen) > 0 || js_param_redeclared(st, name, nlen))
-                return mkerr(st, "'%.*s' already declared", (int)nlen, name);
-            JsOffset pflags = is_const ? kPropConst : 0;
-            JsValue x = setprop(st, st->scope, js_intern(st, name, nlen), resolveprop(st, v), pflags);
-            if (is_err(x)) return x;
+            bool handled = false;
+            if (vtype(st->scope) == T_FRAME) {
+                bool found = false;
+                JsValue r =
+                    js_frame_bind(st, st->scope, name, nlen, resolveprop(st, v), &found);
+                if (is_err(r)) return r;
+                handled = found;
+                if (!found) {  // scanner miss: fall back to a property scope
+                    JsValue s = mkobj(st, scope_word(st->scope));
+                    if (is_err(s)) return s;
+                    st->scope = s;
+                }
+            }
+            if (!handled) {
+                if (lkp(st, st->scope, name, nlen) > 0)
+                    return mkerr(st, "'%.*s' already declared", (int)nlen, name);
+                JsOffset pflags = is_const ? kPropConst : 0;
+                JsValue x =
+                    setprop(st, st->scope, js_intern(st, name, nlen), resolveprop(st, v), pflags);
+                if (is_err(x)) return x;
+            }
         }
         if (next(st) == TOK_SEMICOLON || next(st) == TOK_EOF) break;  // Stop
         EXPECT(TOK_COMMA, );
@@ -3010,6 +3267,7 @@ void internal::runGc(JsEngineState* st)
     // Weak caches: cached entities may be moved or collected by this GC.
     js_code_cache_clear(st);
     js_decision_cache_clear(st);
+    js_meta_cache_clear(st);
     memset(st->intern, 0, sizeof(st->intern));
     if (st->noGc == (JsOffset)~0) return;  // ~0 is a special case: GC Is disabled
     js_mark_all_entities_for_deletion(st);

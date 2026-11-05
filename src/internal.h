@@ -13,8 +13,9 @@ namespace internal {
 enum {
     T_OBJ,  T_PROP, T_STR,     T_UNDEF, T_NULL, T_NUM,
     T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR,
-    T_SLOT,   // reference to a value slot inside a call frame
-    T_FRAME   // call frame: parent scope + parameter slots
+    T_SLOT,    // reference to a value slot inside a call frame
+    T_FRAME,   // call frame: parent scope + parameter/local slots
+    T_UNINIT   // slot declared in frame metadata but not initialized yet
 };
 
 // Frame entities use the otherwise unused entity header type 3.
