@@ -46,7 +46,6 @@ static JsEngine* createState(void* buffer, size_t length, bool ownsBuffer)
     st->gcThreshold = (JsOffset)(static_cast<double>(st->memSize) * JS_GC_THRESHOLD);
     st->rootCount = 0;
     st->rootOverflow = 0;
-    st->arrayHead = 0;
     st->ownsBuffer = ownsBuffer;
     st->bufferSize = length;
     return st;
@@ -137,7 +136,6 @@ JsEngine::~JsEngine()
     cStackPtr = nullptr;
     rootCount = 0;
     rootOverflow = 0;
-    arrayHead = 0;
 }
 
 void JsEngine::destroy(JsEngine* engine)

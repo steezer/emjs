@@ -56,6 +56,12 @@ inline constexpr int kJsDecisionCacheSlots = JS_DECISION_CACHE_SLOTS;
 #define JS_PARAM_SLOTS 1
 #endif
 
+// Compile straight-line function bodies (no control flow) to a small bytecode
+// and cache it per function; unsupported bodies fall back to the interpreter.
+#ifndef JS_BYTECODE
+#define JS_BYTECODE 1
+#endif
+
 // Per-function slot metadata cache, keyed by code-string entity offset.
 #ifndef JS_META_CACHE_SLOTS
 #define JS_META_CACHE_SLOTS 32
@@ -72,6 +78,7 @@ struct JsDecisionCacheEntry {
 struct JsMetaCacheEntry {
     JsOffset code;
     JsOffset meta;
+    JsOffset bc;  // 0 = not compiled, ~0U = not compilable, else bytecode entity
 };
 
 struct JsEngineState {
@@ -100,7 +107,6 @@ struct JsEngineState {
     std::uint8_t rootCount;
     std::uint8_t rootOverflow;  // GC suppressed while roots cannot be tracked
     JsOffset intern[kJsInternSlots];
-    JsOffset arrayHead;  // head of the array-object list
     const char* codeCachePtr[kJsCodeCacheSlots];
     JsOffset codeCacheStr[kJsCodeCacheSlots];
     JsOffset codeCachePos[kJsCodeCacheSlots];

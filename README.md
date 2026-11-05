@@ -448,6 +448,9 @@ Source macros:
 - `JS_PARAM_SLOTS` (default `1`) - bind function parameters and body-level
   `let`/`const`/`function` declarations into call-frame slots instead of
   allocating per-binding properties
+- `JS_BYTECODE` (default `1`) - cache a compact bytecode form of straight-line
+  function bodies (declarations, assignment, arithmetic/comparison operators,
+  calls, `return`); other bodies fall back to the interpreter
 
 ---
 

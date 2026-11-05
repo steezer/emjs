@@ -45,33 +45,22 @@ JsValue set_key(JsEngineState* st, JsValue obj, const char* key, JsValue val)
 
 bool is_array(JsEngineState* st, JsValue obj)
 {
-    if (vtype(obj) != T_OBJ) return false;
-    JsOffset off = lkp(st, obj, "length");
-    return off != 0 && vtype(prop_val(st, off)) == T_NUM;
+    return is_array_obj(st, obj);
 }
 
 double array_len(JsEngineState* st, JsValue arr)
 {
-    JsOffset off = lkp(st, arr, "length");
-    return off == 0 ? 0.0 : tod(prop_val(st, off));
+    return array_length(st, arr);
 }
 
 JsValue array_get(JsEngineState* st, JsValue arr, double idx)
 {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%.17g", idx);
-    JsOffset off = lkp(st, arr, buf);
-    return off == 0 ? mkundef() : prop_val(st, off);
+    return array_get_index(st, arr, idx);
 }
 
 JsValue array_push(JsEngineState* st, JsValue arr, JsValue item)
 {
-    double len = array_len(st, arr);
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%.17g", len);
-    JsValue r = setprop(st, arr, mkstr(st, buf, strlen(buf)), item);
-    if (is_err(r)) return r;
-    return set_key(st, arr, "length", tov(len + 1.0));
+    return array_set_index(st, arr, array_length(st, arr), item);
 }
 
 void append_utf8(std::string& out, uint32_t cp)
@@ -222,11 +211,8 @@ struct Parser {
     JsValue parse_array()
     {
         if (get() != '[') return err("JSON parse error");
-        JsValue arr = mkobj(st, 0);
+        JsValue arr = array_create(st);
         if (is_err(arr)) return arr;
-        JsValue lr = set_key(st, arr, "length", tov(0));
-        if (is_err(lr)) return lr;
-        array_register(st, arr);
         skip_ws();
         if (peek() == ']') {
             get();

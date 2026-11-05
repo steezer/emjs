@@ -491,6 +491,16 @@ static inline JsOffset slot_index(JsValue v)
     return (JsOffset)((vdata(v) >> 24U) & 0xFFFFU);
 }
 
+static inline JsOffset elem_array(JsValue v)
+{
+    return (JsOffset)(vdata(v) & 0xFFFFFFU);
+}
+
+static inline JsOffset elem_index(JsValue v)
+{
+    return (JsOffset)((vdata(v) >> 24U) & 0xFFFFFFU);
+}
+
 // Object parent words encode the parent scope kind in the low bits (entity
 // offsets are 4-aligned): 0 = object scope, 1 = call frame.
 static JsOffset scope_word(JsValue scope)
@@ -605,13 +615,13 @@ static inline JsOffset js_meta_cache_index(JsOffset code)
     return (JsOffset)(h & (kJsMetaCacheSlots - 1));
 }
 
-static JsValue js_meta_cache_get(JsEngineState* st, JsOffset code)
+static JsMetaCacheEntry* js_meta_cache_entry(JsEngineState* st, JsOffset code)
 {
     JsMetaCacheEntry& e = st->metaCache[js_meta_cache_index(code)];
     if (e.code == code && e.meta != 0 && e.meta < st->break_ &&
         (loadoff(st, e.meta) & 3U) == T_STR)
-        return mkval(T_STR, e.meta);
-    return 0;
+        return &e;
+    return nullptr;
 }
 
 static void js_meta_cache_put(JsEngineState* st, JsOffset code, JsOffset meta)
@@ -619,6 +629,7 @@ static void js_meta_cache_put(JsEngineState* st, JsOffset code, JsOffset meta)
     JsMetaCacheEntry& e = st->metaCache[js_meta_cache_index(code)];
     e.code = code;
     e.meta = meta;
+    e.bc = 0;
 }
 
 static void js_meta_cache_clear(JsEngineState* st)
@@ -640,6 +651,7 @@ static JsOffset func_vstr(JsEngineState* st, JsValue fn, JsOffset* len)
 
 static void js_fixup_func(JsEngineState* st, JsValue* vp, JsOffset start, JsOffset size)
 {
+    (void)st;
     if (vp == NULL || vtype(*vp) != T_FUNC) return;
     JsOffset code = func_code_off(*vp);
     JsOffset sraw = func_scope_raw(*vp);
@@ -696,6 +708,10 @@ static size_t cpy(char* dst, size_t dstlen, const char* src, size_t srclen)
 // Stringify JS object
 static size_t strobj(JsEngineState* st, JsValue obj, char* buf, size_t len)
 {
+    // Dense arrays have no property list; render their length only.
+    if (is_array_obj(st, obj)) {
+        return (size_t)snprintf(buf, len, "{\"length\":%g}", array_length(st, obj));
+    }
     size_t n = cpy(buf, len, "{", 1);
     JsOffset next = loadoff(st, (JsOffset)vdata(obj)) & kPropLinkMask;  // First prop offset
     while (next < st->break_ && next != 0) {                  // Iterate over props
@@ -779,7 +795,8 @@ static size_t tostr(JsEngineState* st, JsValue value, char* buf, size_t len)
     case T_NUM:   return strnum(value, buf, len);
     case T_FUNC:  return strfunc(st, value, buf, len);
     case T_CFUNC: return (size_t) snprintf(buf, len, "\"c_func_0x%lx\"", (unsigned long) vdata(value));
-    case T_SLOT:  return tostr(st, resolveprop(st, value), buf, len);
+    case T_SLOT:
+    case T_ELEM:  return tostr(st, resolveprop(st, value), buf, len);
     case T_PROP:  return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
     default:      return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
   }  // clang-format on
@@ -792,6 +809,11 @@ static JsOffset js_alloc(JsEngineState* st, size_t size)
     if (st->break_ + size > st->memSize) return ~(JsOffset)0;
     st->break_ += (JsOffset)size;
     return ofs;
+}
+
+JsOffset internal::alloc_raw(JsEngineState* st, JsOffset size)
+{
+    return js_alloc(st, size);
 }
 
 static JsValue mkentity(JsEngineState* st, JsOffset b, const void* buf, size_t len)
@@ -847,6 +869,12 @@ static void js_fixup_value(JsEngineState* st, JsValue* vp, JsOffset start, JsOff
         *vp = mkval(T_SLOT, (vdata(v) & ~(JsValue)0xFFFFFFU) | frame);
         return;
     }
+    if (vtype(v) == T_ELEM) {
+        JsOffset arr = elem_array(v);
+        if (arr > start) arr -= size;
+        *vp = mkval(T_ELEM, (vdata(v) & ~(JsValue)0xFFFFFFU) | arr);
+        return;
+    }
     if (vtype(v) == T_FUNC) {
         js_fixup_func(st, vp, start, size);
         return;
@@ -880,17 +908,26 @@ static void js_fixup_offsets(JsEngineState* st, JsOffset start, JsOffset size)
             saveval(st, (JsOffset)(off + sizeof(off) + sizeof(off)), val);
         }
         if (type == kFrameEntType) {
-            JsOffset meta = frame_meta(st, off);
-            if (meta > start) saveoff(st, (JsOffset)(off + 4), meta - size);
-            JsOffset code = frame_code(st, off);
-            if (code > start) saveoff(st, (JsOffset)(off + 8), code - size);
-            JsOffset pw = loadoff(st, (JsOffset)(off + 12));
-            if (pw > start) saveoff(st, (JsOffset)(off + 12), pw - size);
-            JsOffset count = frame_count(st, off);
-            for (JsOffset i = 0; i < count; i++) {
-                JsValue sv = frame_get(st, off, i);
-                js_fixup_value(st, &sv, start, size);
-                frame_set(st, off, i, sv);
+            if (v & kVecFlag) {
+                JsOffset count = loadoff(st, (JsOffset)(off + 4));
+                for (JsOffset i = 0; i < count; i++) {
+                    JsValue sv = loadval(st, (JsOffset)(off + kVecHdrSize + i * 8));
+                    js_fixup_value(st, &sv, start, size);
+                    saveval(st, (JsOffset)(off + kVecHdrSize + i * 8), sv);
+                }
+            } else {
+                JsOffset meta = frame_meta(st, off);
+                if (meta > start) saveoff(st, (JsOffset)(off + 4), meta - size);
+                JsOffset code = frame_code(st, off);
+                if (code > start) saveoff(st, (JsOffset)(off + 8), code - size);
+                JsOffset pw = loadoff(st, (JsOffset)(off + 12));
+                if (pw > start) saveoff(st, (JsOffset)(off + 12), pw - size);
+                JsOffset count = frame_count(st, off);
+                for (JsOffset i = 0; i < count; i++) {
+                    JsValue sv = frame_get(st, off, i);
+                    js_fixup_value(st, &sv, start, size);
+                    frame_set(st, off, i, sv);
+                }
             }
         }
     }
@@ -935,19 +972,6 @@ static void js_delete_marked_entities(JsEngineState* st)
     }
 }
 
-// Dead array objects may have been removed; relink the array list so it only
-// contains surviving arrays (array headers carry kObjArrayFlag in bit 30).
-static void js_rebuild_array_list(JsEngineState* st)
-{
-    st->arrayHead = 0;
-    for (JsOffset v, off = 0; off < st->break_; off += esize(v & ~GCMASK)) {
-        v = loadoff(st, off);
-        if ((v & 3U) != T_OBJ || (v & kObjArrayFlag) == 0) continue;
-        saveoff(st, (JsOffset)(off + sizeof(JsOffset)), st->arrayHead);
-        st->arrayHead = off;
-    }
-}
-
 static void js_mark_all_entities_for_deletion(JsEngineState* st)
 {
     for (JsOffset v, off = 0; off < st->break_; off += esize(v & ~GCMASK)) {
@@ -967,6 +991,8 @@ static void js_unmark_ref(JsEngineState* st, JsValue val)
         if (sc != 0) js_unmark_entity(st, sc);
     } else if (t == T_SLOT) {
         js_unmark_entity(st, slot_frame(val));
+    } else if (t == T_ELEM) {
+        js_unmark_entity(st, elem_array(val));
     } else if (is_mem_entity(t)) {
         js_unmark_entity(st, (JsOffset)vdata(val));
     }
@@ -988,13 +1014,20 @@ static JsOffset js_unmark_entity(JsEngineState* st, JsOffset off)
             js_unmark_ref(st, loadval(st, (JsOffset)(off + sizeof(off) + sizeof(off))));
         }
         if ((v & 3) == kFrameEntType) {
-            JsOffset meta = frame_meta(st, off);
-            if (meta != 0) js_unmark_entity(st, meta);
-            JsOffset code = frame_code(st, off);
-            if (code != 0) js_unmark_entity(st, code);
-            js_unmark_ref(st, frame_parent(st, off));
-            JsOffset count = frame_count(st, off);
-            for (JsOffset i = 0; i < count; i++) js_unmark_ref(st, frame_get(st, off, i));
+            if (v & kVecFlag) {
+                JsOffset count = loadoff(st, (JsOffset)(off + 4));
+                for (JsOffset i = 0; i < count; i++) {
+                    js_unmark_ref(st, loadval(st, (JsOffset)(off + kVecHdrSize + i * 8)));
+                }
+            } else {
+                JsOffset meta = frame_meta(st, off);
+                if (meta != 0) js_unmark_entity(st, meta);
+                JsOffset code = frame_code(st, off);
+                if (code != 0) js_unmark_entity(st, code);
+                js_unmark_ref(st, frame_parent(st, off));
+                JsOffset count = frame_count(st, off);
+                for (JsOffset i = 0; i < count; i++) js_unmark_ref(st, frame_get(st, off, i));
+            }
         }
     }
     return v & ~(GCMASK | 3U);
@@ -1374,26 +1407,15 @@ static JsValue assign(JsEngineState* st, JsValue lhs, JsValue val)
         frame_set(st, slot_frame(lhs), slot_index(lhs), val);
         return lhs;
     }
+    if (vtype(lhs) == T_ELEM) {
+        JsValue r = internal::array_set_index(st, mkval(T_OBJ, elem_array(lhs)), elem_index(lhs), val);
+        if (is_err(r)) return r;
+        return lhs;
+    }
     JsOffset prop = (JsOffset)vdata(lhs);
     if (vtype(lhs) == T_PROP && (loadoff(st, prop) & kPropConst) != 0)
         return mkerr(st, "assignment to constant");
     saveval(st, (JsOffset)(prop + sizeof(JsOffset) * 2), val);
-    if (vtype(lhs) == T_PROP) {
-        // Only numeric keys can extend an array's length. Check that cheaply
-        // first: array_owner_of_prop() scans every object in the heap, so
-        // calling it for ordinary variable assignment is prohibitively slow.
-        JsOffset koff = loadoff(st, (JsOffset)(prop + sizeof(JsOffset)));
-        JsOffset klen = (loadoff(st, koff) >> 2) - 1;
-        const char* kp = (char*)&st->memory[koff + sizeof(koff)];
-        if (klen > 0 && is_digit((unsigned char)kp[0])) {
-            char* end = NULL;
-            double idx = strtod(kp, &end);
-            if (end == kp + (ptrdiff_t)klen) {
-                JsValue arr = internal::array_owner_of_prop(st, prop);
-                if (vtype(arr) == T_OBJ) internal::array_update_length_for_index(st, arr, idx);
-            }
-        }
-    }
     return lhs;
 }
 
@@ -1502,9 +1524,7 @@ static JsValue js_array_literal(JsEngineState* st)
         JsValue val = js_expr(st);
         if (exe) {
             if (is_err(val)) return val;
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%.17g", idx);
-            JsValue r = setprop(st, arr, mkstr(st, buf, strlen(buf)), resolveprop(st, val));
+            JsValue r = internal::array_set_index(st, arr, idx, resolveprop(st, val));
             if (is_err(r)) return r;
             idx += 1.0;
         }
@@ -1512,7 +1532,6 @@ static JsValue js_array_literal(JsEngineState* st)
         EXPECT(TOK_COMMA, );
     }
     EXPECT(TOK_RBRACKET, );
-    if (exe) internal::array_set_length(st, arr, idx);
     return arr;
 }
 
@@ -1533,8 +1552,8 @@ static JsValue do_dot_op(JsEngineState* st, JsValue l, JsValue r)
     }
 
     if (internal::is_array_obj(st, l)) {
-        JsValue ar = array_dot_op(st, l, ptr, codereflen(r));
-        if (vtype(ar) == T_CFUNC || vtype(ar) == T_NUM || is_err(ar)) return ar;
+        // Arrays have no user property list: length/methods only.
+        return array_dot_op(st, l, ptr, codereflen(r));
     }
 
     JsOffset off = lkp(st, l, ptr, codereflen(r));
@@ -1763,6 +1782,595 @@ static JsOffset bind_params_props(JsEngineState* st, const char* fn, JsOffset fn
     return fnpos;
 }
 
+#if JS_BYTECODE
+// ---- Small bytecode cache for straight-line function bodies -----------------
+// Supports: let/const, assignments to frame slots, return, calls to slot-held
+// functions, numeric literals, unary/binary arithmetic, bitwise and comparison
+// operators. Anything else marks the function "not compilable" and the normal
+// interpreter is used.
+static constexpr int kMaxBCOps = 64;
+static constexpr int kBCStack = 48;
+enum : uint32_t { BC_CONST = 1, BC_LOAD, BC_STORE, BC_BIN, BC_UNARY, BC_CALL, BC_RETURN, BC_POP };
+
+struct BcCtx {
+    JsEngineState* st;
+    const char* src;
+    JsOffset len;
+    JsOffset pos;
+    const char* codeBase;
+    JsOffset meta;
+    uint8_t* buf;
+    JsOffset n;
+    uint8_t inited[kMaxSlotParams];
+    uint8_t isConst[kMaxSlotParams];
+    bool ok;
+};
+
+static void bc_emit(BcCtx* c, uint32_t op, uint32_t a, uint64_t v)
+{
+    if (!c->ok) return;
+    if (c->n >= kMaxBCOps) {
+        c->ok = false;
+        return;
+    }
+    uint8_t* p = c->buf + (size_t)c->n * 16;
+    memcpy(p, &op, 4);
+    memcpy(p + 4, &a, 4);
+    memcpy(p + 8, &v, 8);
+    c->n++;
+}
+
+static void bc_skip(BcCtx* c)
+{
+    if (c->ok) c->pos = skiptonext(c->src, c->len, c->pos);
+}
+
+static int bc_find_slot(BcCtx* c, const char* name, JsOffset len)
+{
+    JsOffset data = (JsOffset)(c->meta + 4);
+    JsOffset cnt = loadoff(c->st, data);
+    for (JsOffset i = 0; i < cnt; i++) {
+        JsOffset e = (JsOffset)(data + 12 + i * 8);
+        JsOffset off = loadoff(c->st, e);
+        JsOffset l = loadoff(c->st, (JsOffset)(e + 4)) & 0xFFFFU;
+        if (l == len && (len == 0 || memcmp(c->codeBase + off, name, len) == 0)) return (int)i;
+    }
+    return -1;
+}
+
+static bool bc_end_stmt(BcCtx* c)
+{
+    bc_skip(c);
+    if (!c->ok) return false;
+    if (c->pos >= c->len) return true;
+    if (c->src[c->pos] == ';') {
+        c->pos++;
+        return true;
+    }
+    c->ok = false;
+    return false;
+}
+
+static bool bc_parse_expr(BcCtx* c);
+static bool bc_parse_unary(BcCtx* c);
+
+static bool bc_parse_primary(BcCtx* c)
+{
+    bc_skip(c);
+    if (!c->ok || c->pos >= c->len) {
+        c->ok = false;
+        return false;
+    }
+    char ch = c->src[c->pos];
+    if (ch >= '0' && ch <= '9') {
+        JsOffset consumed = 0;
+        double v = js_parse_number_literal(c->src + c->pos, c->len - c->pos, &consumed);
+        if (consumed == 0) {
+            c->ok = false;
+            return false;
+        }
+        c->pos += consumed;
+        bc_emit(c, BC_CONST, 0, tov(v));
+        return c->ok;
+    }
+    if (ch == '(') {
+        c->pos++;
+        if (!bc_parse_expr(c)) return false;
+        bc_skip(c);
+        if (c->pos >= c->len || c->src[c->pos] != ')') {
+            c->ok = false;
+            return false;
+        }
+        c->pos++;
+        return true;
+    }
+    JsOffset idlen = 0;
+    uint8_t tok = parseident(c->src + c->pos, c->len - c->pos, &idlen);
+    if (tok == TOK_TRUE || tok == TOK_FALSE || tok == TOK_NULL || tok == TOK_UNDEF) {
+        c->pos += idlen;
+        JsValue v = tok == TOK_TRUE  ? mktrue()
+                    : tok == TOK_FALSE ? mkfalse()
+                    : tok == TOK_NULL  ? mknull()
+                                       : mkundef();
+        bc_emit(c, BC_CONST, 0, v);
+        return c->ok;
+    }
+    if (tok != TOK_IDENTIFIER) {
+        c->ok = false;
+        return false;
+    }
+    int slot = bc_find_slot(c, c->src + c->pos, idlen);
+    if (slot < 0) {
+        c->ok = false;
+        return false;
+    }
+    c->pos += idlen;
+    bc_skip(c);
+    if (c->pos < c->len && c->src[c->pos] == '(') {
+        c->pos++;
+        bc_emit(c, BC_LOAD, (uint32_t)slot, 0);
+        uint32_t argc = 0;
+        bc_skip(c);
+        if (c->pos < c->len && c->src[c->pos] == ')') {
+            c->pos++;
+        } else {
+            for (;;) {
+                if (!bc_parse_expr(c)) return false;
+                argc++;
+                bc_skip(c);
+                if (c->pos < c->len && c->src[c->pos] == ',') {
+                    c->pos++;
+                    continue;
+                }
+                if (c->pos < c->len && c->src[c->pos] == ')') {
+                    c->pos++;
+                    break;
+                }
+                c->ok = false;
+                return false;
+            }
+        }
+        bc_emit(c, BC_CALL, argc, 0);
+        return c->ok;
+    }
+    if (!c->inited[slot]) {
+        c->ok = false;
+        return false;
+    }
+    bc_emit(c, BC_LOAD, (uint32_t)slot, 0);
+    return c->ok;
+}
+
+static bool bc_parse_unary(BcCtx* c)
+{
+    bc_skip(c);
+    if (!c->ok || c->pos >= c->len) {
+        c->ok = false;
+        return false;
+    }
+    char ch = c->src[c->pos];
+    char next = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+    uint32_t tok = 0;
+    if (ch == '!') {
+        if (next == '=') {
+            c->ok = false;
+            return false;
+        }
+        tok = TOK_NOT;
+    } else if (ch == '~') {
+        tok = TOK_TILDA;
+    } else if (ch == '+') {
+        if (next == '+' || next == '=') {
+            c->ok = false;
+            return false;
+        }
+        tok = TOK_UPLUS;
+    } else if (ch == '-') {
+        if (next == '-' || next == '=') {
+            c->ok = false;
+            return false;
+        }
+        tok = TOK_UMINUS;
+    } else {
+        return bc_parse_primary(c);
+    }
+    c->pos++;
+    if (!bc_parse_unary(c)) return false;
+    bc_emit(c, BC_UNARY, tok, 0);
+    return c->ok;
+}
+
+static bool bc_parse_mul(BcCtx* c)
+{
+    if (!bc_parse_unary(c)) return false;
+    for (;;) {
+        bc_skip(c);
+        if (!c->ok || c->pos >= c->len) break;
+        char ch = c->src[c->pos];
+        char next = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+        uint32_t tok = 0;
+        if (ch == '*') {
+            if (next == '*' || next == '=') { c->ok = false; return false; }
+            tok = TOK_MUL;
+        } else if (ch == '/') {
+            if (next == '=') { c->ok = false; return false; }
+            tok = TOK_DIV;
+        } else if (ch == '%') {
+            if (next == '=') { c->ok = false; return false; }
+            tok = TOK_REM;
+        } else {
+            break;
+        }
+        c->pos++;
+        if (!bc_parse_unary(c)) return false;
+        bc_emit(c, BC_BIN, tok, 0);
+    }
+    return c->ok;
+}
+
+static bool bc_parse_add(BcCtx* c)
+{
+    if (!bc_parse_mul(c)) return false;
+    for (;;) {
+        bc_skip(c);
+        if (!c->ok || c->pos >= c->len) break;
+        char ch = c->src[c->pos];
+        char next = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+        uint32_t tok = 0;
+        if (ch == '+') {
+            if (next == '+' || next == '=') { c->ok = false; return false; }
+            tok = TOK_PLUS;
+        } else if (ch == '-') {
+            if (next == '-' || next == '=') { c->ok = false; return false; }
+            tok = TOK_MINUS;
+        } else {
+            break;
+        }
+        c->pos++;
+        if (!bc_parse_mul(c)) return false;
+        bc_emit(c, BC_BIN, tok, 0);
+    }
+    return c->ok;
+}
+
+static bool bc_parse_shift(BcCtx* c)
+{
+    if (!bc_parse_add(c)) return false;
+    for (;;) {
+        bc_skip(c);
+        if (!c->ok || c->pos >= c->len) break;
+        char ch = c->src[c->pos];
+        char n1 = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+        char n2 = c->pos + 2 < c->len ? c->src[c->pos + 2] : '\0';
+        uint32_t tok = 0;
+        if (ch == '<' && n1 == '<') {
+            if (n2 == '=') { c->ok = false; return false; }
+            c->pos += 2;
+            tok = TOK_SHL;
+        } else if (ch == '>' && n1 == '>') {
+            if (n2 == '>') {
+                if (c->pos + 3 < c->len && c->src[c->pos + 3] == '=') { c->ok = false; return false; }
+                c->pos += 3;
+                tok = TOK_ZSHR;
+            } else {
+                if (n2 == '=') { c->ok = false; return false; }
+                c->pos += 2;
+                tok = TOK_SHR;
+            }
+        } else {
+            break;
+        }
+        if (!bc_parse_add(c)) return false;
+        bc_emit(c, BC_BIN, tok, 0);
+    }
+    return c->ok;
+}
+
+static bool bc_parse_relational(BcCtx* c)
+{
+    if (!bc_parse_shift(c)) return false;
+    for (;;) {
+        bc_skip(c);
+        if (!c->ok || c->pos >= c->len) break;
+        char ch = c->src[c->pos];
+        char next = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+        uint32_t tok = 0;
+        if (ch == '<') {
+            if (next == '<') break;
+            tok = next == '=' ? TOK_LE : TOK_LT;
+        } else if (ch == '>') {
+            if (next == '>') break;
+            tok = next == '=' ? TOK_GE : TOK_GT;
+        } else {
+            break;
+        }
+        c->pos += (next == '=') ? 2 : 1;
+        if (!bc_parse_shift(c)) return false;
+        bc_emit(c, BC_BIN, tok, 0);
+    }
+    return c->ok;
+}
+
+static bool bc_parse_equality(BcCtx* c)
+{
+    if (!bc_parse_relational(c)) return false;
+    for (;;) {
+        bc_skip(c);
+        if (!c->ok || c->pos >= c->len) break;
+        char ch = c->src[c->pos];
+        char n1 = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+        char n2 = c->pos + 2 < c->len ? c->src[c->pos + 2] : '\0';
+        uint32_t tok = 0;
+        JsOffset adv = 0;
+        if (ch == '=' && n1 == '=') {
+            if (n2 == '=') { tok = TOK_EQ; adv = 3; }
+            else { tok = TOK_LOOSE_EQ; adv = 2; }
+        } else if (ch == '!' && n1 == '=') {
+            if (n2 == '=') { tok = TOK_NE; adv = 3; }
+            else { tok = TOK_LOOSE_NE; adv = 2; }
+        } else {
+            break;
+        }
+        c->pos += adv;
+        if (!bc_parse_relational(c)) return false;
+        bc_emit(c, BC_BIN, tok, 0);
+    }
+    return c->ok;
+}
+
+static bool bc_parse_bitand(BcCtx* c)
+{
+    if (!bc_parse_equality(c)) return false;
+    for (;;) {
+        bc_skip(c);
+        if (!c->ok || c->pos >= c->len) break;
+        char ch = c->src[c->pos];
+        char next = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+        if (ch != '&' || next == '&' || next == '=') break;
+        c->pos++;
+        if (!bc_parse_equality(c)) return false;
+        bc_emit(c, BC_BIN, TOK_AND, 0);
+    }
+    return c->ok;
+}
+
+static bool bc_parse_bitxor(BcCtx* c)
+{
+    if (!bc_parse_bitand(c)) return false;
+    for (;;) {
+        bc_skip(c);
+        if (!c->ok || c->pos >= c->len) break;
+        char ch = c->src[c->pos];
+        char next = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+        if (ch != '^' || next == '=') break;
+        c->pos++;
+        if (!bc_parse_bitand(c)) return false;
+        bc_emit(c, BC_BIN, TOK_XOR, 0);
+    }
+    return c->ok;
+}
+
+static bool bc_parse_expr(BcCtx* c)
+{
+    if (!bc_parse_bitxor(c)) return false;
+    for (;;) {
+        bc_skip(c);
+        if (!c->ok || c->pos >= c->len) break;
+        char ch = c->src[c->pos];
+        char next = c->pos + 1 < c->len ? c->src[c->pos + 1] : '\0';
+        if (ch != '|' || next == '|' || next == '=') break;
+        c->pos++;
+        if (!bc_parse_bitxor(c)) return false;
+        bc_emit(c, BC_BIN, TOK_OR, 0);
+    }
+    return c->ok;
+}
+
+static bool bc_statement(BcCtx* c)
+{
+    bc_skip(c);
+    if (!c->ok || c->pos >= c->len) return true;
+    if (c->src[c->pos] == '{') {  // nested statements/blocks: not compilable
+        c->ok = false;
+        return false;
+    }
+    bool isConst = js_word_at(c->src, c->len, c->pos, "const", 5);
+    bool isLet = !isConst && js_word_at(c->src, c->len, c->pos, "let", 3);
+    if (isLet || isConst) {
+        c->pos += isConst ? 5 : 3;
+        for (;;) {
+            bc_skip(c);
+            JsOffset idlen = 0;
+            if (c->pos >= c->len ||
+                parseident(c->src + c->pos, c->len - c->pos, &idlen) != TOK_IDENTIFIER) {
+                c->ok = false;
+                return false;
+            }
+            int slot = bc_find_slot(c, c->src + c->pos, idlen);
+            if (slot < 0 || c->inited[slot]) {
+                c->ok = false;
+                return false;
+            }
+            c->pos += idlen;
+            bc_skip(c);
+            if (c->pos < c->len && c->src[c->pos] == '=') {
+                c->pos++;
+                if (!bc_parse_expr(c)) return false;
+            } else {
+                if (isConst) {
+                    c->ok = false;
+                    return false;
+                }
+                bc_emit(c, BC_CONST, 0, mkundef());
+            }
+            bc_emit(c, BC_STORE, (uint32_t)slot, 0);
+            c->inited[slot] = 1;
+            if (isConst) c->isConst[slot] = 1;
+            bc_skip(c);
+            if (c->pos < c->len && c->src[c->pos] == ',') {
+                c->pos++;
+                continue;
+            }
+            break;
+        }
+        return bc_end_stmt(c);
+    }
+    if (js_word_at(c->src, c->len, c->pos, "return", 6)) {
+        c->pos += 6;
+        bc_skip(c);
+        if (c->pos >= c->len || c->src[c->pos] == ';') {
+            bc_emit(c, BC_CONST, 0, mkundef());
+        } else {
+            if (!bc_parse_expr(c)) return false;
+            bc_skip(c);
+            if (c->pos < c->len && c->src[c->pos] != ';') {  // unsupported suffix (e.g. ?:)
+                c->ok = false;
+                return false;
+            }
+        }
+        bc_emit(c, BC_RETURN, 0, 0);
+        c->pos = c->len;  // ignore unreachable trailing source
+        return true;
+    }
+    // "ident = expr" assignment statement, or an expression statement.
+    bc_skip(c);
+    JsOffset save = c->pos;
+    if (c->pos < c->len) {
+        JsOffset idlen = 0;
+        uint8_t tok = parseident(c->src + c->pos, c->len - c->pos, &idlen);
+        if (tok == TOK_IDENTIFIER) {
+            JsOffset after = skiptonext(c->src, c->len, c->pos + idlen);
+            if (after < c->len && c->src[after] == '=' &&
+                !(after + 1 < c->len && c->src[after + 1] == '=')) {
+                int slot = bc_find_slot(c, c->src + c->pos, idlen);
+                if (slot < 0 || !c->inited[slot] || c->isConst[slot]) {
+                    c->ok = false;
+                    return false;
+                }
+                c->pos = after + 1;
+                if (!bc_parse_expr(c)) return false;
+                bc_emit(c, BC_STORE, (uint32_t)slot, 0);
+                return bc_end_stmt(c);
+            }
+        }
+    }
+    c->pos = save;
+    if (!bc_parse_expr(c)) return false;
+    bc_emit(c, BC_POP, 0, 0);
+    return bc_end_stmt(c);
+}
+
+static JsOffset bc_compile(JsEngineState* st, const char* fn, JsOffset bodyOff, JsOffset bodyLen,
+                           JsOffset meta, int pcount)
+{
+    uint8_t code[kMaxBCOps * 16];
+    BcCtx c;
+    memset(&c, 0, sizeof(c));
+    c.st = st;
+    c.src = fn + bodyOff;
+    c.len = bodyLen;
+    c.pos = 0;
+    c.codeBase = fn;
+    c.meta = meta;
+    c.buf = code;
+    c.ok = true;
+    for (int i = 0; i < pcount && i < kMaxSlotParams; i++) c.inited[i] = 1;
+    while (c.ok) {
+        c.pos = skiptonext(c.src, c.len, c.pos);
+        if (c.pos >= c.len) break;
+        if (c.src[c.pos] == ';') {
+            c.pos++;
+            continue;
+        }
+        if (!bc_statement(&c)) break;
+    }
+    if (!c.ok) return (JsOffset)~0U;
+    uint8_t out[4 + kMaxBCOps * 16];
+    uint32_t n = (uint32_t)c.n;
+    memcpy(out, &n, sizeof(n));
+    memcpy(out + 4, code, (size_t)c.n * 16);
+    JsValue s = mkstr(st, out, 4 + (size_t)c.n * 16);
+    if (is_err(s)) return (JsOffset)~0U;
+    return (JsOffset)vdata(s);
+}
+
+static JsValue bc_execute(JsEngineState* st, JsOffset bcEnt, JsOffset frame)
+{
+    const uint8_t* base = &st->memory[bcEnt + sizeof(JsOffset)];
+    JsOffset n = 0;
+    memcpy(&n, base, sizeof(n));
+    const uint8_t* p = base + 4;
+    JsValue stack[kBCStack];
+    int sp = 0;
+    for (JsOffset i = 0; i < n; i++, p += 16) {
+        uint32_t op = 0, a = 0;
+        uint64_t val = 0;
+        memcpy(&op, p, 4);
+        memcpy(&a, p + 4, 4);
+        memcpy(&val, p + 8, 8);
+        switch (op) {
+            case BC_CONST:
+                if (sp >= kBCStack) return mkerr(st, "C stack");
+                stack[sp++] = val;
+                break;
+            case BC_LOAD: {
+                if (sp >= kBCStack) return mkerr(st, "C stack");
+                JsValue v = frame_get(st, frame, a);
+                if (vtype(v) == T_UNINIT) return mkerr(st, "not found");
+                stack[sp++] = v;
+                break;
+            }
+            case BC_STORE: {
+                if (sp <= 0) return mkerr(st, "bad bytecode");
+                JsValue v = stack[--sp];
+                JsValue r = assign(st, mkslot(frame, a), v);
+                if (is_err(r)) return r;
+                break;
+            }
+            case BC_BIN: {
+                if (sp < 2) return mkerr(st, "bad bytecode");
+                JsValue r = stack[--sp], l = stack[--sp];
+                JsValue v = do_op(st, (uint8_t)a, l, r);
+                if (is_err(v)) return v;
+                stack[sp++] = v;
+                break;
+            }
+            case BC_UNARY: {
+                if (sp < 1) return mkerr(st, "bad bytecode");
+                JsValue r = stack[--sp];
+                JsValue v = do_op(st, (uint8_t)a, 0, r);
+                if (is_err(v)) return v;
+                stack[sp++] = v;
+                break;
+            }
+            case BC_CALL: {
+                uint32_t argc = a;
+                if (sp < (int)argc + 1) return mkerr(st, "bad bytecode");
+                JsValue fnval = resolveprop(st, stack[sp - argc - 1]);
+                if (vtype(fnval) != T_FUNC && vtype(fnval) != T_CFUNC)
+                    return mkerr(st, "calling non-function");
+                JsValue v = js_invoke(st, fnval, mkundef(), &stack[sp - argc], (int)argc);
+                if (is_err(v)) return v;
+                sp -= (int)argc + 1;
+                stack[sp++] = v;
+                break;
+            }
+            case BC_RETURN: {
+                if (sp < 1) return mkerr(st, "bad bytecode");
+                return resolveprop(st, stack[--sp]);
+            }
+            case BC_POP:
+                if (sp <= 0) return mkerr(st, "bad bytecode");
+                sp--;
+                break;
+            default:
+                return mkerr(st, "bad bytecode");
+        }
+    }
+    return mkundef();
+}
+#endif  // JS_BYTECODE
+
 static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, JsOffset fnlen, JsValue* args,
                             int argc)
 {
@@ -1782,12 +2390,14 @@ static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, Js
     bool overflow = false;
     bool use_slots = false;
     JsValue meta = 0;
+    JsMetaCacheEntry* mce = nullptr;
     JsOffset poff[kMaxSlotParams], plen[kMaxSlotParams];
 
 #if JS_PARAM_SLOTS
     // Fast path: cached metadata carries the parameter count and body offset,
     // so no parameter re-parsing is needed at all.
-    meta = js_meta_cache_get(st, codeEnt);
+    mce = js_meta_cache_entry(st, codeEnt);
+    meta = mce ? mkval(T_STR, mce->meta) : 0;
     if (meta != 0) {
         JsOffset data = (JsOffset)(vdata(meta) + sizeof(JsOffset));
         JsOffset cnt = loadoff(st, data);
@@ -1865,6 +2475,7 @@ static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, Js
                     return meta;
                 }
                 js_meta_cache_put(st, codeEnt, (JsOffset)vdata(meta));
+                mce = js_meta_cache_entry(st, codeEnt);
             }
         }
         use_slots = !overflow && total > 0 && meta != 0;
@@ -1883,6 +2494,20 @@ static JsValue invoke_js_fn(JsEngineState* st, JsValue fnval, const char* fn, Js
             frame_set(st, frameOff, (JsOffset)i, v);
         }
         st->scope = frame;
+#if JS_BYTECODE
+        if (mce != nullptr) {
+            if (mce->bc == 0) {
+                mce->bc = bc_compile(st, fn, (JsOffset)fnpos, (JsOffset)n,
+                                     (JsOffset)vdata(meta), pcount);
+            }
+            if (mce->bc != (JsOffset)~0U) {
+                st->flags = kFlagCall;
+                JsValue bres = bc_execute(st, mce->bc, frameOff);
+                st->scope = saved_scope;
+                return bres;
+            }
+        }
+#endif
     } else {
         JsValue scope = mkobj(st, scope_word(parent_scope));
         if (is_err(scope)) {
@@ -1958,17 +2583,17 @@ static JsValue do_op(JsEngineState *st, uint8_t op, JsValue lhs, JsValue rhs)
   setlwm(st);
   if (is_err(l)) return l;
   if (is_err(r)) return r;
-  if (is_assign(op) && vtype(lhs) != T_PROP && vtype(lhs) != T_SLOT) return mkerr(st, "bad lhs");
+  if (is_assign(op) && vtype(lhs) != T_PROP && vtype(lhs) != T_SLOT && vtype(lhs) != T_ELEM) return mkerr(st, "bad lhs");
   switch (op) {
     case TOK_TYPEOF:  return mkstr(st, typestr(vtype(r)), strlen(typestr(vtype(r))));
     case TOK_CALL:    return do_call_op(st, l, r);
     case TOK_ASSIGN:  return assign(st, lhs, r);
     case TOK_POSTINC: {
-      if (vtype(lhs) != T_PROP && vtype(lhs) != T_SLOT) return mkerr(st, "bad lhs for ++");
+      if (vtype(lhs) != T_PROP && vtype(lhs) != T_SLOT && vtype(lhs) != T_ELEM) return mkerr(st, "bad lhs for ++");
       do_assign_op(st, TOK_PLUS_ASSIGN, lhs, tov(1)); return l;
     }
     case TOK_POSTDEC: {
-      if (vtype(lhs) != T_PROP && vtype(lhs) != T_SLOT) return mkerr(st, "bad lhs for --");
+      if (vtype(lhs) != T_PROP && vtype(lhs) != T_SLOT && vtype(lhs) != T_ELEM) return mkerr(st, "bad lhs for --");
       do_assign_op(st, TOK_MINUS_ASSIGN, lhs, tov(1)); return l;
     }
     case TOK_NOT:     if (vtype(r) == T_BOOL) return mkval(T_BOOL, !vdata(r)); break;
@@ -2867,7 +3492,7 @@ static JsValue js_switch(JsEngineState* st)
 
 static JsValue js_while(JsEngineState* st)
 {
-    uint8_t flags = st->flags, exe = !(flags & kFlagNoExec);
+    uint8_t flags = st->flags;
     JsValue res = mkundef(), v = mkundef();
     RootScope roots(st, {&res, &v});
     st->consumed = 1;
@@ -3273,7 +3898,6 @@ void internal::runGc(JsEngineState* st)
     js_mark_all_entities_for_deletion(st);
     js_unmark_used_entities(st);
     js_delete_marked_entities(st);
-    js_rebuild_array_list(st);
 }
 
 bool internal::streq(const char* buf, size_t len, const char* p, size_t n)
@@ -3285,6 +3909,10 @@ JsValue internal::resolveprop(JsEngineState* st, JsValue v)
 {
     if (vtype(v) == T_SLOT) {
         return resolveprop(st, frame_get(st, slot_frame(v), slot_index(v)));
+    }
+    if (vtype(v) == T_ELEM) {
+        return resolveprop(
+            st, internal::array_get_index(st, mkval(T_OBJ, elem_array(v)), (double)elem_index(v)));
     }
     if (vtype(v) != T_PROP) {
         return v;

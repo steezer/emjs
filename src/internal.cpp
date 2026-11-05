@@ -145,7 +145,6 @@ static JsValue string_substring_fn(JsEngine* js, JsValue* args, int n)
 }
 
 constexpr JsOffset kPropLinkMask = 0x3FFFFFFCU;
-constexpr JsOffset kGcMask = ~(((JsOffset)~0) >> 1);
 
 void saveval(JsEngineState* st, JsOffset off, JsValue val)
 {
@@ -165,87 +164,143 @@ JsOffset prop_lookup(JsEngineState* st, JsValue obj, const char* key, std::size_
     return 0;
 }
 
-static double array_get_length(JsEngineState* st, JsValue arr)
+// ---- Dense array storage ------------------------------------------------
+// An array is a T_OBJ whose header word (normally the first-property link)
+// stores "vector offset | kObjArrayFlag". The vector is a type-3 entity holding
+// count + a contiguous value array. Numeric element accesses use T_ELEM refs.
+static JsOffset array_vec(JsEngineState* st, JsValue arr)
 {
-    JsOffset off = prop_lookup(st, arr, "length", 6);
-    if (off == 0) return 0;
-    JsValue len = loadval(st, (JsOffset)(off + sizeof(JsOffset) * 2));
-    return vtype(len) == T_NUM ? tod(len) : 0;
+    if (vtype(arr) != T_OBJ) return 0;
+    JsOffset h = loadoff(st, (JsOffset)vdata(arr));
+    if ((h & kObjArrayFlag) == 0) return 0;
+    return h & kPropLinkMask;
 }
 
-void array_register(JsEngineState* st, JsValue arr)
+static JsOffset array_vec_count(JsEngineState* st, JsOffset vec)
 {
-    if (vtype(arr) != T_OBJ) return;
+    return vec == 0 ? 0 : loadoff(st, (JsOffset)(vec + 4));
+}
+
+double array_length(JsEngineState* st, JsValue arr)
+{
+    return (double)array_vec_count(st, array_vec(st, arr));
+}
+
+bool is_array_obj(JsEngineState* st, JsValue obj)
+{
+    if (vtype(obj) != T_OBJ) return false;
+    return (loadoff(st, (JsOffset)vdata(obj)) & kObjArrayFlag) != 0;
+}
+
+static JsOffset array_vec_new(JsEngineState* st, JsOffset cap)
+{
+    if (cap > kMaxArrayIndex) return (JsOffset)~0;
+    JsOffset off = alloc_raw(st, kVecHdrSize + cap * sizeof(JsValue));
+    if (off == (JsOffset)~0) return off;
+    JsOffset hdr = (cap << 2U) | kVecFlag | kFrameEntType;
+    JsOffset zero = 0;
+    std::memcpy(&st->memory[off], &hdr, sizeof(hdr));
+    std::memcpy(&st->memory[off + 4], &zero, sizeof(zero));
+    JsValue uninit = mkval(T_UNINIT, 0);
+    for (JsOffset i = 0; i < cap; i++) {
+        std::memcpy(&st->memory[off + kVecHdrSize + i * sizeof(JsValue)], &uninit, sizeof(uninit));
+    }
+    return off;
+}
+
+static JsValue array_reserve(JsEngineState* st, JsValue arr, JsOffset need)
+{
+    JsOffset vec = array_vec(st, arr);
+    JsOffset cap = vec == 0 ? 0 : ((loadoff(st, vec) >> 2U) & 0x0FFFFFFFU);
+    if (cap >= need) return mkundef();
+    JsOffset ncap = cap == 0 ? 4 : cap;
+    while (ncap < need) {
+        if (ncap > kMaxArrayIndex / 2) {
+            ncap = kMaxArrayIndex;
+            break;
+        }
+        ncap *= 2;
+    }
+    if (ncap < need) return mkerr(st, "oom");
+    JsOffset nv = array_vec_new(st, ncap);
+    if (nv == (JsOffset)~0) return mkerr(st, "oom");
+    JsOffset count = array_vec_count(st, vec);
+    std::memcpy(&st->memory[nv + 4], &count, sizeof(count));
+    for (JsOffset i = 0; i < count; i++) {
+        JsValue v = loadval(st, (JsOffset)(vec + kVecHdrSize + i * 8));
+        saveval(st, (JsOffset)(nv + kVecHdrSize + i * 8), v);
+    }
     JsOffset off = (JsOffset)vdata(arr);
-    JsOffset h = loadoff(st, off);
-    if (h & kObjArrayFlag) return;
-    JsOffset nh = h | kObjArrayFlag;
+    JsOffset nh = kObjArrayFlag | nv;
     std::memcpy(&st->memory[off], &nh, sizeof(nh));
-    std::memcpy(&st->memory[off + sizeof(JsOffset)], &st->arrayHead, sizeof(st->arrayHead));
-    st->arrayHead = off;
+    return mkundef();
 }
 
 JsValue array_create(JsEngineState* st)
 {
     JsValue arr = mkobj(st, 0);
     if (is_err(arr)) return arr;
-    JsValue r = setprop(st, arr, mkstr(st, "length", 6), tov(0));
-    if (is_err(r)) return r;
-    array_register(st, arr);
+    JsOffset off = (JsOffset)vdata(arr);
+    JsOffset h = loadoff(st, off);
+    JsOffset nh = (h & kPropLinkMask) | kObjArrayFlag;
+    std::memcpy(&st->memory[off], &nh, sizeof(nh));
     return arr;
-}
-
-bool is_array_obj(JsEngineState* st, JsValue obj)
-{
-    if (vtype(obj) != T_OBJ) return false;
-    JsOffset off = prop_lookup(st, obj, "length", 6);
-    if (off == 0) return false;
-    JsValue len = loadval(st, (JsOffset)(off + sizeof(JsOffset) * 2));
-    return vtype(len) == T_NUM;
 }
 
 void array_set_length(JsEngineState* st, JsValue arr, double len)
 {
-    JsOffset off = prop_lookup(st, arr, "length", 6);
-    if (off != 0) {
-        saveval(st, (JsOffset)(off + sizeof(JsOffset) * 2), tov(len));
-    } else {
-        setprop(st, arr, mkstr(st, "length", 6), tov(len));
-    }
-}
-
-JsValue array_owner_of_prop(JsEngineState* st, JsOffset prop_off)
-{
-    // Walk the array list instead of every object in the heap.
-    for (JsOffset off = st->arrayHead; off != 0 && off < st->break_;) {
-        if ((loadoff(st, off) & 3) != T_OBJ) break;
-        for (JsOffset p = loadoff(st, (JsOffset)off) & kPropLinkMask; p != 0 && p < st->break_;
-             p = loadoff(st, p) & kPropLinkMask) {
-            if (p == prop_off) return mkval(T_OBJ, off);
+    if (!is_array_obj(st, arr)) return;
+    if (!(len >= 0) || len > (double)kMaxArrayIndex) return;
+    JsOffset n = (JsOffset)len;
+    if ((double)n != len) return;
+    JsOffset vec = array_vec(st, arr);
+    JsOffset count = array_vec_count(st, vec);
+    if (n > count) {
+        JsValue r = array_reserve(st, arr, n);
+        if (is_err(r)) return;
+        vec = array_vec(st, arr);
+        JsValue uninit = mkval(T_UNINIT, 0);
+        for (JsOffset i = count; i < n; i++) {
+            saveval(st, (JsOffset)(vec + kVecHdrSize + i * 8), uninit);
         }
-        off = loadoff(st, (JsOffset)(off + sizeof(JsOffset)));
     }
+    if (vec != 0) {
+        JsOffset n32 = n;
+        std::memcpy(&st->memory[vec + 4], &n32, sizeof(n32));
+    }
+}
+
+JsValue array_get_index(JsEngineState* st, JsValue arr, double idx)
+{
+    if (!(idx >= 0) || idx > (double)kMaxArrayIndex) return mkundef();
+    JsOffset i = (JsOffset)idx;
+    if ((double)i != idx) return mkundef();
+    JsOffset vec = array_vec(st, arr);
+    if (vec == 0 || i >= array_vec_count(st, vec)) return mkundef();
+    JsValue v = loadval(st, (JsOffset)(vec + kVecHdrSize + i * 8));
+    if (vtype(v) == T_UNINIT) return mkundef();
+    return resolveprop(st, v);
+}
+
+JsValue array_set_index(JsEngineState* st, JsValue arr, double idx, JsValue val)
+{
+    if (!(idx >= 0) || idx > (double)kMaxArrayIndex) return mkerr(st, "bad index");
+    JsOffset i = (JsOffset)idx;
+    if ((double)i != idx) return mkerr(st, "bad index");
+    JsValue r = array_reserve(st, arr, i + 1);
+    if (is_err(r)) return r;
+    JsOffset vec = array_vec(st, arr);
+    JsOffset count = array_vec_count(st, vec);
+    if (i >= count) {
+        JsValue uninit = mkval(T_UNINIT, 0);
+        for (JsOffset k = count; k < i; k++) {
+            saveval(st, (JsOffset)(vec + kVecHdrSize + k * 8), uninit);
+        }
+        JsOffset n32 = i + 1;
+        std::memcpy(&st->memory[vec + 4], &n32, sizeof(n32));
+    }
+    saveval(st, (JsOffset)(vec + kVecHdrSize + i * 8), resolveprop(st, val));
     return mkundef();
-}
-
-void array_update_length_for_index(JsEngineState* st, JsValue arr, double idx)
-{
-    if (idx < 0) return;
-    double len = array_get_length(st, arr);
-    if (idx + 1.0 > len) array_set_length(st, arr, idx + 1.0);
-}
-
-JsValue array_key_from_value(JsEngineState* st, JsValue keyval)
-{
-    keyval = resolveprop(st, keyval);
-    uint8_t t = vtype(keyval);
-    if (t == T_STR) return keyval;
-    if (t == T_NUM) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.17g", tod(keyval));
-        return mkstr(st, buf, std::strlen(buf));
-    }
-    return mkerr(st, "bad index");
 }
 
 // Format an array index into buf without allocating. Matches the "%.17g"
@@ -275,6 +330,17 @@ JsValue array_bracket_op(JsEngineState* st, JsValue obj, JsValue keyval)
 {
     keyval = resolveprop(st, keyval);
     if (vtype(obj) != T_OBJ) return mkerr(st, "lookup in non-obj");
+    if (is_array_obj(st, obj)) {
+        if (vtype(keyval) == T_NUM) {
+            double d = tod(keyval);
+            JsOffset i = (JsOffset)d;
+            if (d >= 0 && d <= (double)kMaxArrayIndex && (double)i == d) {
+                return mkval(T_ELEM, ((JsValue)(i & 0xFFFFFFU) << 24U) |
+                                         ((JsOffset)vdata(obj) & 0xFFFFFFU));
+            }
+        }
+        return mkundef();
+    }
     char buf[32];
     const char* ptr = NULL;
     JsOffset klen = 0;
@@ -310,7 +376,7 @@ static bool array_require(JsEngineState* st, JsValue arr, double* len, JsValue* 
         if (err != nullptr) *err = mkerr(st, "not array");
         return false;
     }
-    if (len != nullptr) *len = array_get_length(st, arr);
+    if (len != nullptr) *len = array_length(st, arr);
     return true;
 }
 
@@ -337,22 +403,16 @@ static JsValue array_resolve_callback(
     return fn;
 }
 
-static void array_index_key(char* buf, std::size_t bufsz, double idx);
-
 static JsValue array_push(JsEngineState* st, JsValue arr, JsValue* args, int argc)
 {
     JsValue err = mkundef();
     double len = 0;
     if (!array_require(st, arr, &len, &err)) return err;
     for (int i = 0; i < argc; i++) {
-        char buf[32];
-        array_index_key(buf, sizeof(buf), len);
-        JsValue key = mkstr(st, buf, std::strlen(buf));
-        JsValue v = setprop(st, arr, key, resolveprop(st, args[i]));
+        JsValue v = array_set_index(st, arr, len, resolveprop(st, args[i]));
         if (is_err(v)) return v;
         len += 1.0;
     }
-    array_set_length(st, arr, len);
     return tov(len);
 }
 
@@ -363,38 +423,19 @@ static JsValue array_pop(JsEngineState* st, JsValue arr)
     if (!array_require(st, arr, &len, &err)) return err;
     if (len <= 0) return mkundef();
     len -= 1.0;
-    char buf[32];
-    array_index_key(buf, sizeof(buf), len);
-    JsOffset off = prop_lookup(st, arr, buf, std::strlen(buf));
-    JsValue res = mkundef();
-    if (off != 0) res = resolveprop(st, loadval(st, (JsOffset)(off + sizeof(JsOffset) * 2)));
+    JsValue res = array_get_index(st, arr, len);
     array_set_length(st, arr, len);
     return res;
 }
 
-static void array_index_key(char* buf, std::size_t bufsz, double idx)
-{
-    std::snprintf(buf, bufsz, "%.17g", idx);
-}
-
 static JsValue array_get_elem(JsEngineState* st, JsValue arr, double idx)
 {
-    char buf[32];
-    array_index_key(buf, sizeof(buf), idx);
-    JsOffset off = prop_lookup(st, arr, buf, std::strlen(buf));
-    if (off == 0) return mkundef();
-    return resolveprop(st, loadval(st, (JsOffset)(off + sizeof(JsOffset) * 2)));
+    return array_get_index(st, arr, idx);
 }
 
 static JsValue array_set_elem(JsEngineState* st, JsValue arr, double idx, JsValue val)
 {
-    char buf[32];
-    array_index_key(buf, sizeof(buf), idx);
-    JsValue key = mkstr(st, buf, std::strlen(buf));
-    JsValue r = setprop(st, arr, key, resolveprop(st, val));
-    if (is_err(r)) return r;
-    array_update_length_for_index(st, arr, idx);
-    return mkundef();
+    return array_set_index(st, arr, idx, val);
 }
 
 static double array_relative_index(double len, double idx)
@@ -950,7 +991,7 @@ JsValue array_dot_op(JsEngineState* st, JsValue arr, const char* prop, std::size
         {"join", 4, array_join_fn},
     };
     if (!is_array_obj(st, arr)) return mkundef();
-    if (streq(prop, prop_len, "length", 6)) return tov(array_get_length(st, arr));
+    if (streq(prop, prop_len, "length", 6)) return tov(array_length(st, arr));
     return lookup_native_method(kArrayMethods, sizeof(kArrayMethods) / sizeof(kArrayMethods[0]), prop, prop_len);
 }
 

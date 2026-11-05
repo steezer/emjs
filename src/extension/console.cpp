@@ -26,19 +26,12 @@ std::unordered_map<std::string, TimePoint>& timers()
 
 static double console_array_len(JsEngineState* st, JsValue arr)
 {
-    JsOffset off = prop_lookup(st, arr, "length", 6);
-    if (off == 0) return 0;
-    JsValue len = loadval(st, (JsOffset)(off + sizeof(JsOffset) * 2));
-    return vtype(len) == T_NUM ? tod(len) : 0;
+    return array_length(st, arr);
 }
 
 static JsValue console_array_at(JsEngineState* st, JsValue arr, double idx)
 {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.17g", idx);
-    JsOffset off = prop_lookup(st, arr, buf, std::strlen(buf));
-    if (off == 0) return mkundef();
-    return resolveprop(st, loadval(st, (JsOffset)(off + sizeof(JsOffset) * 2)));
+    return array_get_index(st, arr, idx);
 }
 
 void append_value(JsEngine* js, std::string& out, JsValue value)

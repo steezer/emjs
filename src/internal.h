@@ -15,7 +15,8 @@ enum {
     T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR,
     T_SLOT,    // reference to a value slot inside a call frame
     T_FRAME,   // call frame: parent scope + parameter/local slots
-    T_UNINIT   // slot declared in frame metadata but not initialized yet
+    T_UNINIT,  // slot/array element not initialized yet
+    T_ELEM     // reference to a dense array element (array object + index)
 };
 
 // Frame entities use the otherwise unused entity header type 3.
@@ -24,6 +25,13 @@ enum {
 // The parent word is a tagged scope offset (bit 0: 1 = frame, 0 = object).
 static constexpr JsOffset kFrameHdrSize = 16;
 static constexpr JsOffset kFrameEntType = 3;
+
+// Dense array vector, also entity type 3 but with kVecFlag set:
+// [header: capacity<<2 | kVecFlag | 3][count][value0][value1]...
+// Elements at/after count are T_UNINIT holes.
+static constexpr JsOffset kVecFlag = 0x40000000U;
+static constexpr JsOffset kVecHdrSize = 8;
+static constexpr JsOffset kMaxArrayIndex = 0xFFFFFEU;
 
 inline JsValue tov(double d)
 {
@@ -88,6 +96,9 @@ inline JsOffset esize(JsOffset w)
         case T_STR:
             return (JsOffset)(sizeof(JsOffset) + align32(w >> 2U));
         case kFrameEntType:
+            if (w & kVecFlag) {
+                return (JsOffset)(kVecHdrSize + ((w >> 2U) & 0x0FFFFFFFU) * sizeof(JsValue));
+            }
             return (JsOffset)(kFrameHdrSize + ((w >> 2U) & 0x0FFFFFFFU) * sizeof(JsValue));
         default:
             return (JsOffset)~0U;
@@ -148,13 +159,13 @@ JsOffset prop_lookup(JsEngineState* st, JsValue obj, const char* key, std::size_
 // The object's parent field then links it into the engine's array list, which
 // lets index stores find the owning array without scanning the whole heap.
 inline constexpr JsOffset kObjArrayFlag = 0x40000000U;
+JsOffset alloc_raw(JsEngineState* st, JsOffset size);
 JsValue array_create(JsEngineState* st);
-void array_register(JsEngineState* st, JsValue arr);
 bool is_array_obj(JsEngineState* st, JsValue obj);
+double array_length(JsEngineState* st, JsValue arr);
 void array_set_length(JsEngineState* st, JsValue arr, double len);
-JsValue array_owner_of_prop(JsEngineState* st, JsOffset prop_off);
-void array_update_length_for_index(JsEngineState* st, JsValue arr, double idx);
-JsValue array_key_from_value(JsEngineState* st, JsValue keyval);
+JsValue array_get_index(JsEngineState* st, JsValue arr, double idx);
+JsValue array_set_index(JsEngineState* st, JsValue arr, double idx, JsValue val);
 JsValue array_bracket_op(JsEngineState* st, JsValue obj, JsValue keyval);
 JsValue js_invoke(JsEngineState* st, JsValue func, JsValue thisArg, JsValue* args, int argc);
 bool js_same_value_zero(JsEngineState* st, JsValue a, JsValue b);
