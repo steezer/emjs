@@ -273,6 +273,149 @@ static bool is_ident_continue(int c)
     return c == '_' || c == '$' || is_alpha(c) || is_digit(c);
 }
 
+// Cheap source scan helpers used to avoid allocating scope objects when they
+// cannot be observed. They skip strings and comments; false positives only cost
+// an extra allocation, false negatives would change semantics.
+static bool js_word_at(const char* p, JsOffset len, JsOffset i, const char* w, JsOffset wl)
+{
+    if (i + wl > len || memcmp(p + i, w, wl) != 0) return false;
+    if (i > 0 && is_ident_continue((unsigned char)p[i - 1])) return false;
+    if (i + wl < len && is_ident_continue((unsigned char)p[i + wl])) return false;
+    return true;
+}
+
+// Return the offset of the '}' matching the '{' at `start` (or len).
+static JsOffset js_block_end(const char* p, JsOffset len, JsOffset start)
+{
+    JsOffset depth = 0;
+    for (JsOffset i = start; i < len;) {
+        char c = p[i];
+        if (c == '"' || c == '\'') {
+            char q = c;
+            for (i++; i < len && p[i] != q; i++) {
+                if (p[i] == '\\' && i + 1 < len) i++;
+            }
+            if (i < len) i++;
+            continue;
+        }
+        if (c == '/' && i + 1 < len) {
+            if (p[i + 1] == '/') {
+                for (i += 2; i < len && p[i] != '\n'; i++) {}
+                continue;
+            }
+            if (p[i + 1] == '*') {
+                for (i += 2; i + 1 < len && !(p[i] == '*' && p[i + 1] == '/'); i++) {}
+                i = i + 1 < len ? i + 2 : len;
+                continue;
+            }
+        }
+        if (c == '{') depth++;
+        if (c == '}' && --depth == 0) return i;
+        i++;
+    }
+    return len;
+}
+
+// Does [p, p+len) contain a declaration keyword (let/const/function/class)?
+static bool js_has_declaration(const char* p, JsOffset len)
+{
+    for (JsOffset i = 0; i < len;) {
+        char c = p[i];
+        if (c == '"' || c == '\'') {
+            char q = c;
+            for (i++; i < len && p[i] != q; i++) {
+                if (p[i] == '\\' && i + 1 < len) i++;
+            }
+            if (i < len) i++;
+            continue;
+        }
+        if (c == '/' && i + 1 < len) {
+            if (p[i + 1] == '/') {
+                for (i += 2; i < len && p[i] != '\n'; i++) {}
+                continue;
+            }
+            if (p[i + 1] == '*') {
+                for (i += 2; i + 1 < len && !(p[i] == '*' && p[i + 1] == '/'); i++) {}
+                i = i + 1 < len ? i + 2 : len;
+                continue;
+            }
+        }
+        if (c == 'l' && js_word_at(p, len, i, "let", 3)) return true;
+        if (c == 'c' && (js_word_at(p, len, i, "const", 5) || js_word_at(p, len, i, "class", 5)))
+            return true;
+        if (c == 'f' && js_word_at(p, len, i, "function", 8)) return true;
+        i++;
+    }
+    return false;
+}
+
+// Does [p, p+len) contain a closure literal (function expression/declaration
+// or arrow function)?
+static bool js_has_closure(const char* p, JsOffset len)
+{
+    for (JsOffset i = 0; i < len;) {
+        char c = p[i];
+        if (c == '"' || c == '\'') {
+            char q = c;
+            for (i++; i < len && p[i] != q; i++) {
+                if (p[i] == '\\' && i + 1 < len) i++;
+            }
+            if (i < len) i++;
+            continue;
+        }
+        if (c == '/' && i + 1 < len) {
+            if (p[i + 1] == '/') {
+                for (i += 2; i < len && p[i] != '\n'; i++) {}
+                continue;
+            }
+            if (p[i + 1] == '*') {
+                for (i += 2; i + 1 < len && !(p[i] == '*' && p[i + 1] == '/'); i++) {}
+                i = i + 1 < len ? i + 2 : len;
+                continue;
+            }
+        }
+        if (c == '=' && i + 1 < len && p[i + 1] == '>') return true;
+        if (c == 'f' && js_word_at(p, len, i, "function", 8)) return true;
+        i++;
+    }
+    return false;
+}
+
+enum : uint8_t { kDecisionBlockScope = 1, kDecisionClosure = 2 };
+
+static inline JsOffset js_decision_index(const char* code, JsOffset pos, uint8_t kind)
+{
+    uintptr_t h = ((uintptr_t)code >> 3) ^ ((uintptr_t)pos * 2654435761U) ^
+                  ((uintptr_t)kind * 0x9E3779B9U);
+    return (JsOffset)(h & (kJsDecisionCacheSlots - 1));
+}
+
+static bool js_decision_get(JsEngineState* st, const char* code, JsOffset pos, uint8_t kind,
+                            int* out)
+{
+    JsDecisionCacheEntry& e = st->decisions[js_decision_index(code, pos, kind)];
+    if (e.code == code && e.pos == pos && e.kind == kind) {
+        *out = e.value;
+        return true;
+    }
+    return false;
+}
+
+static void js_decision_put(JsEngineState* st, const char* code, JsOffset pos, uint8_t kind,
+                            int value)
+{
+    JsDecisionCacheEntry& e = st->decisions[js_decision_index(code, pos, kind)];
+    e.code = code;
+    e.pos = pos;
+    e.kind = kind;
+    e.value = (std::uint8_t)(value != 0);
+}
+
+static void js_decision_cache_clear(JsEngineState* st)
+{
+    memset(st->decisions, 0, sizeof(st->decisions));
+}
+
 static bool is_unary(uint8_t tok)
 {
     return tok >= TOK_POSTINC && tok <= TOK_UMINUS;
@@ -385,6 +528,7 @@ static void js_code_cache_clear(JsEngineState* st)
 void internal::code_cache_clear(JsEngineState* st)
 {
     js_code_cache_clear(st);
+    js_decision_cache_clear(st);
 }
 
 static JsOffset func_vstr(JsEngineState* st, JsValue fn, JsOffset* len)
@@ -787,17 +931,17 @@ static uint8_t next(JsEngineState* st)
     if (st->consumed == 0) {
         return st->token;
     }
-    
+
     st->consumed = 0;
     st->token = TOK_ERR;
     st->tokenOffset = st->position = skiptonext(st->code, st->codeLen, st->position);
     st->tokenLen = 0;
     const char* buf = st->code + st->tokenOffset;
-    
+
     // clang-format off
     if (st->tokenOffset >= st->codeLen) {
-        st->token = TOK_EOF; 
-        return st->token; 
+        st->token = TOK_EOF;
+        return st->token;
     }
     
 #define TOK(T, LEN) { st->token = T; st->tokenLen = (LEN); break; }
@@ -932,6 +1076,21 @@ static JsValue js_block(JsEngineState* st, bool create_scope)
 {
     JsValue res = mkundef();
     RootScope roots(st, {&res});
+    // A block only needs its own scope if it declares something. Blocks that
+    // are pure statement groups (very common as loop/if bodies) can run in the
+    // enclosing scope: no allocation, no GC contribution.
+#if JS_SCOPE_ELISION
+    if (create_scope) {
+        int needs = 1;
+        if (!js_decision_get(st, st->code, st->tokenOffset, kDecisionBlockScope, &needs)) {
+            JsOffset end = js_block_end(st->code, st->codeLen, st->tokenOffset);
+            JsOffset body = st->tokenOffset + 1;
+            needs = js_has_declaration(st->code + body, end - body);
+            js_decision_put(st, st->code, st->tokenOffset, kDecisionBlockScope, needs);
+        }
+        if (!needs) create_scope = false;
+    }
+#endif
     if (create_scope) mkscope(st);  // Enter new scope
     st->consumed = 1;
     // JsOffset pos = st->position;
@@ -1978,6 +2137,8 @@ static JsValue js_for(JsEngineState* st)
     JsValue v = mkundef(), res = mkundef();
     JsOffset pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
     JsValue loopScope = mkundef();
+    bool iter_capture = false;
+    JsOffset pos_loop = st->tokenOffset;  // 'for' keyword
     RootScope roots(st, {&v, &res, &loopScope});
     if (exe) mkscope(st);  // Enter new scope
     if (!expect(st, TOK_FOR, &res)) goto done;
@@ -2017,7 +2178,22 @@ static JsValue js_for(JsEngineState* st)
     v = js_block_or_stmt(st);
     if (is_err2(&v, &res)) goto done;
     pos4 = st->position;  // end of body
+    // Per-iteration environments are only observable when a closure can
+    // capture the loop bindings. Otherwise reuse the single loop scope, which
+    // avoids one object + property copy per iteration.
     if (for_lex != kForLexNone && exe) {
+#if JS_SCOPE_ELISION
+        int has = 0;
+        if (!js_decision_get(st, st->code, pos_loop, kDecisionClosure, &has)) {
+            has = js_has_closure(st->code + pos_loop, pos4 - pos_loop);
+            js_decision_put(st, st->code, pos_loop, kDecisionClosure, has);
+        }
+        iter_capture = has != 0;
+#else
+        iter_capture = true;
+#endif
+    }
+    if (iter_capture) {
         // First per-iteration environment, initialized from the `let` bindings.
         JsValue firstScope = mkobj(st, (JsOffset)vdata(upper(st, loopScope)));
         scope_copy_props(st, loopScope, firstScope);
@@ -2050,7 +2226,7 @@ static JsValue js_for(JsEngineState* st)
         // bindings, then run the final expression there. This keeps body-side
         // updates (e.g. an increment inside the body) while closures made in
         // the body still see the values they captured.
-        if (for_lex != kForLexNone && exe) {
+        if (iter_capture) {
             JsValue nextScope = mkobj(st, (JsOffset)vdata(upper(st, st->scope)));
             scope_copy_props(st, st->scope, nextScope);
             st->scope = nextScope;
@@ -2561,6 +2737,7 @@ void internal::runGc(JsEngineState* st)
     setlwm(st);
     // Weak caches: cached entities may be moved or collected by this GC.
     js_code_cache_clear(st);
+    js_decision_cache_clear(st);
     memset(st->intern, 0, sizeof(st->intern));
     if (st->noGc == (JsOffset)~0) return;  // ~0 is a special case: GC Is disabled
     js_mark_all_entities_for_deletion(st);

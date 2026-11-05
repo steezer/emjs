@@ -37,6 +37,26 @@ inline constexpr int kJsInternSlots = JS_INTERN_SLOTS;
 #endif
 inline constexpr int kJsCodeCacheSlots = JS_CODE_CACHE_SLOTS;
 
+// Cached source-scan decisions (does a block declare anything? does a loop
+// body contain a closure?) keyed by source position. Power of two.
+#ifndef JS_DECISION_CACHE_SLOTS
+#define JS_DECISION_CACHE_SLOTS 16
+#endif
+inline constexpr int kJsDecisionCacheSlots = JS_DECISION_CACHE_SLOTS;
+
+// Elide scope objects for blocks that declare nothing and for `for(let ...)`
+// loops with no closure capture (P1 frame-reuse optimization).
+#ifndef JS_SCOPE_ELISION
+#define JS_SCOPE_ELISION 1
+#endif
+
+struct JsDecisionCacheEntry {
+    const char* code;
+    JsOffset pos;
+    std::uint8_t kind;
+    std::uint8_t value;
+};
+
 struct JsEngineState {
     JsOffset cStackSize;
     JsOffset lowWatermark;
@@ -68,6 +88,7 @@ struct JsEngineState {
     JsOffset codeCacheStr[kJsCodeCacheSlots];
     JsOffset codeCachePos[kJsCodeCacheSlots];
     JsOffset codeCacheEnd[kJsCodeCacheSlots];
+    JsDecisionCacheEntry decisions[kJsDecisionCacheSlots];
     bool ownsBuffer;
     std::size_t bufferSize;
 };
