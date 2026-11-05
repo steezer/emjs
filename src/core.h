@@ -50,6 +50,12 @@ inline constexpr int kJsDecisionCacheSlots = JS_DECISION_CACHE_SLOTS;
 #define JS_SCOPE_ELISION 1
 #endif
 
+// Bind function parameters into fixed slots of a call frame instead of
+// allocating a key string + property per parameter (P1 slotization).
+#ifndef JS_PARAM_SLOTS
+#define JS_PARAM_SLOTS 1
+#endif
+
 struct JsDecisionCacheEntry {
     const char* code;
     JsOffset pos;

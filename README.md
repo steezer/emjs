@@ -439,6 +439,13 @@ Source macros:
 - `JS_EXPR_MAX` (default `20`)
 - `JS_GC_THRESHOLD` (default `0.25`)
 - `EMJS_ENABLE_DUMP` (default `0`)
+- `JS_MAX_ROOTS` (default `16`) - GC root slot capacity
+- `JS_INTERN_SLOTS` (default `32`), `JS_CODE_CACHE_SLOTS` (default `8`),
+  `JS_DECISION_CACHE_SLOTS` (default `16`) - identifier/code/scope caches (powers of two)
+- `JS_SCOPE_ELISION` (default `1`) - skip scope objects for declaration-free blocks
+  and non-capturing `for (let ...)` loops
+- `JS_PARAM_SLOTS` (default `1`) - bind function parameters into call-frame slots
+  instead of per-parameter properties
 
 ---
 

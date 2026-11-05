@@ -11,9 +11,18 @@ namespace Emjs {
 namespace internal {
 
 enum {
-    T_OBJ,  T_PROP, T_STR,     T_UNDEF, T_NULL, T_NUM,  
-    T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR
+    T_OBJ,  T_PROP, T_STR,     T_UNDEF, T_NULL, T_NUM,
+    T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR,
+    T_SLOT,   // reference to a value slot inside a call frame
+    T_FRAME   // call frame: parent scope + parameter slots
 };
+
+// Frame entities use the otherwise unused entity header type 3.
+// Layout: [header: count<<2 | 3][meta entity][code entity][parent word]
+//         [slot0][slot1]...
+// The parent word is a tagged scope offset (bit 0: 1 = frame, 0 = object).
+static constexpr JsOffset kFrameHdrSize = 16;
+static constexpr JsOffset kFrameEntType = 3;
 
 inline JsValue tov(double d)
 {
@@ -77,6 +86,8 @@ inline JsOffset esize(JsOffset w)
             return (JsOffset)(sizeof(JsOffset) + sizeof(JsOffset) + sizeof(JsValue));
         case T_STR:
             return (JsOffset)(sizeof(JsOffset) + align32(w >> 2U));
+        case kFrameEntType:
+            return (JsOffset)(kFrameHdrSize + ((w >> 2U) & 0x0FFFFFFFU) * sizeof(JsValue));
         default:
             return (JsOffset)~0U;
     }
